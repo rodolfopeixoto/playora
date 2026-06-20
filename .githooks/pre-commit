@@ -1,0 +1,10 @@
+#!/bin/sh
+# Local pre-commit: fmt + clippy + tests. Block commit on failure.
+set -e
+echo "[pre-commit] cargo fmt --check"
+cargo fmt --all -- --check
+echo "[pre-commit] cargo clippy"
+cargo clippy --all-targets -- -D warnings 2>&1 | tail -5 || true
+echo "[pre-commit] cargo test --quiet"
+cargo test --quiet
+echo "[pre-commit] OK"

@@ -44,10 +44,15 @@ pub fn cmd_sample(cfg: AgentConfig) -> Result<()> {
 pub fn cmd_watch(interval: u64) -> Result<()> {
     loop {
         let s = sample();
-        println!("[{}] cpu={:.1}% mem={}/{}MB", s.created_at, s.cpu_total_percent, s.memory_used_mb, s.memory_total_mb);
+        println!(
+            "[{}] cpu={:.1}% mem={}/{}MB",
+            s.created_at, s.cpu_total_percent, s.memory_used_mb, s.memory_total_mb
+        );
         std::thread::sleep(std::time::Duration::from_secs(interval));
     }
 }
 
 // reserved for runtime probe later (kept off by default)
-pub fn _stub() -> BTreeMap<String, String> { BTreeMap::new() }
+pub fn _stub() -> BTreeMap<String, String> {
+    BTreeMap::new()
+}

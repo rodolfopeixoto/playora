@@ -6,38 +6,81 @@ use std::io::Read;
 use std::path::Path;
 
 const SKIP_DIRS: &[&str] = &[
-    "savestates","themes","BGM","bgmusic","cheats","tools","backup",
-    "ports_scripts",".update",".r36s-smart",".playora",".darkos",
-    "System Volume Information",".Spotlight-V100",".fseventsd",
+    "savestates",
+    "themes",
+    "BGM",
+    "bgmusic",
+    "cheats",
+    "tools",
+    "backup",
+    "ports_scripts",
+    ".update",
+    ".r36s-smart",
+    ".playora",
+    ".darkos",
+    "System Volume Information",
+    ".Spotlight-V100",
+    ".fseventsd",
 ];
 
-const SAVE_LIKE: &[&str] = &["srm","sav","state","rtc","mcr","fla","sa1","sa2","eep","xml","txt","auto"];
+const SAVE_LIKE: &[&str] = &[
+    "srm", "sav", "state", "rtc", "mcr", "fla", "sa1", "sa2", "eep", "xml", "txt", "auto",
+];
 
 pub fn cmd_scan(cfg: AgentConfig) -> Result<()> {
     let conn = crate::db::open(&crate::cfg::db_path())?;
     let mut count = 0u64;
     for root in &cfg.rom_paths {
         let root = Path::new(root);
-        if !root.is_dir() { continue; }
+        if !root.is_dir() {
+            continue;
+        }
         for sys_entry in std::fs::read_dir(root)? {
             let sys_entry = sys_entry?;
             let sys_path = sys_entry.path();
-            if !sys_path.is_dir() { continue; }
-            let sys_name = sys_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-            if sys_name.starts_with('.') || SKIP_DIRS.contains(&sys_name.as_str()) { continue; }
+            if !sys_path.is_dir() {
+                continue;
+            }
+            let sys_name = sys_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            if sys_name.starts_with('.') || SKIP_DIRS.contains(&sys_name.as_str()) {
+                continue;
+            }
             let system = GameSystem::from_folder(&sys_name);
-            for entry in walkdir::WalkDir::new(&sys_path).max_depth(2).into_iter().flatten() {
-                if !entry.file_type().is_file() { continue; }
+            for entry in walkdir::WalkDir::new(&sys_path)
+                .max_depth(2)
+                .into_iter()
+                .flatten()
+            {
+                if !entry.file_type().is_file() {
+                    continue;
+                }
                 let p = entry.path();
-                let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
-                if SAVE_LIKE.contains(&ext.as_str()) { continue; }
-                let md = match std::fs::metadata(p) { Ok(m) => m, Err(_) => continue };
+                let ext = p
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if SAVE_LIKE.contains(&ext.as_str()) {
+                    continue;
+                }
+                let md = match std::fs::metadata(p) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
                 let size = md.len();
                 // Lazy hash: skip if already same path+size+mtime
                 let rom_hash = quick_hash(p)?;
                 let meta = GameMetadata {
                     system,
-                    name: p.file_stem().and_then(|s| s.to_str()).unwrap_or("?").to_string(),
+                    name: p
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("?")
+                        .to_string(),
                     rom_path: p.display().to_string(),
                     rom_hash: Some(rom_hash),
                     file_size: size,
@@ -63,7 +106,10 @@ pub fn cmd_scan(cfg: AgentConfig) -> Result<()> {
                     event_id: EventId::new(),
                     device_id: cfg.device_id.clone(),
                     created_at: Utc::now(),
-                    payload: EventPayload::RomScanned(RomScanned { metadata: meta, scanned_at: Utc::now() }),
+                    payload: EventPayload::RomScanned(RomScanned {
+                        metadata: meta,
+                        scanned_at: Utc::now(),
+                    }),
                 };
                 crate::db::enqueue(&conn, &ev)?;
                 count += 1;

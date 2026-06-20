@@ -8,7 +8,9 @@ pub fn open(path: &str) -> Result<Connection> {
         "PRAGMA synchronous=NORMAL",
         "PRAGMA temp_store=MEMORY",
         "PRAGMA foreign_keys=ON",
-    ] { c.execute_batch(p)?; }
+    ] {
+        c.execute_batch(p)?;
+    }
     c.execute_batch(SCHEMA)?;
     seed_catalog(&c)?;
     Ok(c)
@@ -17,14 +19,51 @@ pub fn open(path: &str) -> Result<Connection> {
 fn seed_catalog(c: &Connection) -> Result<()> {
     // Idempotent: only seed if catalog is empty
     let n: i64 = c.query_row("SELECT COUNT(*) FROM catalog_items", [], |r| r.get(0))?;
-    if n > 0 { return Ok(()); }
+    if n > 0 {
+        return Ok(());
+    }
     // Minimal mock of LEGAL homebrew/open-source items.
     let items = [
-        ("hb-cave-story",  "Cave Story (Doukutsu)",         "psx",  "homebrew_game",     "freeware", "Pixel"),
-        ("ob-2048",        "2048 SDL",                      "ports","open_source_game",  "MIT",      "gabrielecirulli"),
-        ("hb-pixel-dungeon","Shattered Pixel Dungeon",      "ports","open_source_game",  "GPL-3.0",  "00-Evan"),
-        ("th-art-book",    "Theme: ArtBookNext",            "themes","theme",            "CC-BY-NC", "anthonycaccese"),
-        ("cfg-rk3326-low", "Config Pack: RK3326 low-power", "configs","config_pack",     "Public Domain", "playora"),
+        (
+            "hb-cave-story",
+            "Cave Story (Doukutsu)",
+            "psx",
+            "homebrew_game",
+            "freeware",
+            "Pixel",
+        ),
+        (
+            "ob-2048",
+            "2048 SDL",
+            "ports",
+            "open_source_game",
+            "MIT",
+            "gabrielecirulli",
+        ),
+        (
+            "hb-pixel-dungeon",
+            "Shattered Pixel Dungeon",
+            "ports",
+            "open_source_game",
+            "GPL-3.0",
+            "00-Evan",
+        ),
+        (
+            "th-art-book",
+            "Theme: ArtBookNext",
+            "themes",
+            "theme",
+            "CC-BY-NC",
+            "anthonycaccese",
+        ),
+        (
+            "cfg-rk3326-low",
+            "Config Pack: RK3326 low-power",
+            "configs",
+            "config_pack",
+            "Public Domain",
+            "playora",
+        ),
     ];
     for (id, title, system, ty, license, author) in items {
         c.execute(

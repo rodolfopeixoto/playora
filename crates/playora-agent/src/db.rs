@@ -5,14 +5,18 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 
 pub fn open(path: &Path) -> Result<Connection> {
-    if let Some(p) = path.parent() { std::fs::create_dir_all(p)?; }
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
     let c = Connection::open(path)?;
     for p in [
         "PRAGMA journal_mode=WAL",
         "PRAGMA synchronous=NORMAL",
         "PRAGMA temp_store=MEMORY",
         "PRAGMA foreign_keys=ON",
-    ] { c.execute_batch(p)?; }
+    ] {
+        c.execute_batch(p)?;
+    }
     c.execute_batch(SCHEMA)?;
     Ok(c)
 }
@@ -67,7 +71,11 @@ pub fn mark_error(conn: &Connection, id: &EventId, err: &str) -> Result<()> {
 }
 
 pub fn count_pending(conn: &Connection) -> Result<u32> {
-    let n: u32 = conn.query_row("SELECT COUNT(*) FROM events_outbox WHERE status='pending'", [], |r| r.get(0))?;
+    let n: u32 = conn.query_row(
+        "SELECT COUNT(*) FROM events_outbox WHERE status='pending'",
+        [],
+        |r| r.get(0),
+    )?;
     Ok(n)
 }
 
@@ -129,7 +137,9 @@ mod tests {
     fn enqueue_and_pending_count() {
         let dir = tempdir().unwrap();
         let db = open(&dir.path().join("t.db")).unwrap();
-        for _ in 0..3 { enqueue(&db, &sample_event()).unwrap(); }
+        for _ in 0..3 {
+            enqueue(&db, &sample_event()).unwrap();
+        }
         assert_eq!(count_pending(&db).unwrap(), 3);
     }
 

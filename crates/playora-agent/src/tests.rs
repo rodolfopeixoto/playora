@@ -6,10 +6,16 @@ use std::time::Duration;
 pub fn cmd_doctor(cfg: AgentConfig, _interactive: bool) -> Result<()> {
     let conn = crate::db::open(&crate::cfg::db_path());
     println!("config:   {}", crate::cfg::config_path().display());
-    println!("db:       {}  {}", crate::cfg::db_path().display(), if conn.is_ok() { "OK" } else { "FAIL" });
+    println!(
+        "db:       {}  {}",
+        crate::cfg::db_path().display(),
+        if conn.is_ok() { "OK" } else { "FAIL" }
+    );
 
     // network probe
-    let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(5)).build()?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?;
     let url = format!("{}/health", cfg.server_url.trim_end_matches('/'));
     match client.get(&url).send() {
         Ok(r) => println!("server:   {} -> HTTP {}", url, r.status()),
@@ -17,11 +23,21 @@ pub fn cmd_doctor(cfg: AgentConfig, _interactive: bool) -> Result<()> {
     }
 
     // proc
-    println!("/proc:    {}", if std::path::Path::new("/proc/cpuinfo").exists() { "OK" } else { "absent" });
+    println!(
+        "/proc:    {}",
+        if std::path::Path::new("/proc/cpuinfo").exists() {
+            "OK"
+        } else {
+            "absent"
+        }
+    );
     let snap = crate::hw::snapshot();
     println!("cpu:      {} cores ({})", snap.cpu_cores, snap.cpu_model);
     println!("mem:      {}MB total", snap.mem_total_mb);
-    let pending = conn.ok().and_then(|c| crate::db::count_pending(&c).ok()).unwrap_or(0);
+    let pending = conn
+        .ok()
+        .and_then(|c| crate::db::count_pending(&c).ok())
+        .unwrap_or(0);
     println!("pending:  {pending} events");
 
     Ok(())
@@ -31,37 +47,46 @@ pub fn cmd_test_session(cfg: AgentConfig, system: &str, game: &str, duration: u6
     let conn = crate::db::open(&crate::cfg::db_path())?;
     let session_id = SessionId::new();
     let started = Utc::now();
-    crate::db::enqueue(&conn, &Event {
-        event_id: EventId::new(),
-        device_id: cfg.device_id.clone(),
-        created_at: started,
-        payload: EventPayload::GameSessionStarted(GameSessionStarted {
-            session_id: session_id.clone(),
-            system: GameSystem::from_folder(system),
-            game_name: game.into(),
-            rom_path: format!("/roms/{system}/{game}"),
-            rom_hash: None,
-            core: None,
-            started_at: started,
-        }),
-    })?;
-    println!("started fake session {} for '{}' ({})", session_id, game, system);
+    crate::db::enqueue(
+        &conn,
+        &Event {
+            event_id: EventId::new(),
+            device_id: cfg.device_id.clone(),
+            created_at: started,
+            payload: EventPayload::GameSessionStarted(GameSessionStarted {
+                session_id: session_id.clone(),
+                system: GameSystem::from_folder(system),
+                game_name: game.into(),
+                rom_path: format!("/roms/{system}/{game}"),
+                rom_hash: None,
+                core: None,
+                started_at: started,
+            }),
+        },
+    )?;
+    println!(
+        "started fake session {} for '{}' ({})",
+        session_id, game, system
+    );
     std::thread::sleep(Duration::from_secs(duration));
     let ended = Utc::now();
-    crate::db::enqueue(&conn, &Event {
-        event_id: EventId::new(),
-        device_id: cfg.device_id.clone(),
-        created_at: ended,
-        payload: EventPayload::GameSessionFinished(GameSessionFinished {
-            session_id,
-            ended_at: ended,
-            duration_seconds: duration,
-            exit_code: Some(0),
-            save_changed: false,
-            max_cpu_percent: Some(0.0),
-            max_memory_mb: Some(0),
-        }),
-    })?;
+    crate::db::enqueue(
+        &conn,
+        &Event {
+            event_id: EventId::new(),
+            device_id: cfg.device_id.clone(),
+            created_at: ended,
+            payload: EventPayload::GameSessionFinished(GameSessionFinished {
+                session_id,
+                ended_at: ended,
+                duration_seconds: duration,
+                exit_code: Some(0),
+                save_changed: false,
+                max_cpu_percent: Some(0.0),
+                max_memory_mb: Some(0),
+            }),
+        },
+    )?;
     println!("finished fake session: {duration}s");
     // Best effort: trigger one sync if server reachable
     let _ = crate::sync::cmd_sync_once(cfg);
@@ -95,8 +120,14 @@ pub fn cmd_hardware_test(cfg: AgentConfig, mode: &str, _interactive: bool) -> Re
     });
 
     // 3) server reachable
-    let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(5)).build()?;
-    let server_ok = client.get(format!("{}/health", cfg.server_url.trim_end_matches('/'))).send().map(|r| r.status().is_success()).unwrap_or(false);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?;
+    let server_ok = client
+        .get(format!("{}/health", cfg.server_url.trim_end_matches('/')))
+        .send()
+        .map(|r| r.status().is_success())
+        .unwrap_or(false);
     results.push(HardwareTestResult {
         test_id: TestId::new(),
         test_type: "server_reachable".into(),
@@ -109,7 +140,10 @@ pub fn cmd_hardware_test(cfg: AgentConfig, mode: &str, _interactive: bool) -> Re
 
     // 4) free space
     let snap = crate::hw::snapshot();
-    let free_ok = snap.disks.iter().any(|d| d.mount == "/roms" && d.free_bytes > 500 * 1024 * 1024);
+    let free_ok = snap
+        .disks
+        .iter()
+        .any(|d| d.mount == "/roms" && d.free_bytes > 500 * 1024 * 1024);
     results.push(HardwareTestResult {
         test_id: TestId::new(),
         test_type: "free_space".into(),
@@ -142,12 +176,15 @@ pub fn cmd_hardware_test(cfg: AgentConfig, mode: &str, _interactive: bool) -> Re
 
     for r in &results {
         println!("[{}] {} score={:?}", r.status, r.test_type, r.score);
-        crate::db::enqueue(&conn, &Event {
-            event_id: EventId::new(),
-            device_id: cfg.device_id.clone(),
-            created_at: Utc::now(),
-            payload: EventPayload::HardwareTestResult(r.clone()),
-        })?;
+        crate::db::enqueue(
+            &conn,
+            &Event {
+                event_id: EventId::new(),
+                device_id: cfg.device_id.clone(),
+                created_at: Utc::now(),
+                payload: EventPayload::HardwareTestResult(r.clone()),
+            },
+        )?;
     }
     Ok(())
 }

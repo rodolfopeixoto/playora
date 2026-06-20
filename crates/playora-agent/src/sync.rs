@@ -6,20 +6,25 @@ use std::time::Duration;
 pub fn cmd_status(cfg: AgentConfig) -> Result<()> {
     let conn = crate::db::open(&crate::cfg::db_path())?;
     let pending = crate::db::count_pending(&conn)?;
-    let last_sync: Option<String> = conn.query_row(
-        "SELECT last_success_at FROM sync_state WHERE server_url=?1",
-        rusqlite::params![cfg.server_url],
-        |r| r.get(0),
-    ).ok();
-    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-        "device_id": cfg.device_id.0,
-        "device_name": cfg.device_name,
-        "server_url": cfg.server_url,
-        "pending_events": pending,
-        "last_sync_at": last_sync,
-        "agent_version": crate::AGENT_VERSION,
-        "now": Utc::now(),
-    }))?);
+    let last_sync: Option<String> = conn
+        .query_row(
+            "SELECT last_success_at FROM sync_state WHERE server_url=?1",
+            rusqlite::params![cfg.server_url],
+            |r| r.get(0),
+        )
+        .ok();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "device_id": cfg.device_id.0,
+            "device_name": cfg.device_name,
+            "server_url": cfg.server_url,
+            "pending_events": pending,
+            "last_sync_at": last_sync,
+            "agent_version": crate::AGENT_VERSION,
+            "now": Utc::now(),
+        }))?
+    );
     Ok(())
 }
 
@@ -53,21 +58,40 @@ pub fn cmd_sync_once(cfg: AgentConfig) -> Result<()> {
         println!("no pending events");
         return Ok(());
     }
-    let batch = SyncBatch { device_id: cfg.device_id.clone(), agent_version: crate::AGENT_VERSION.into(), events: events.clone() };
-    let url = format!("{}/api/v1/events/batch", cfg.server_url.trim_end_matches('/'));
+    let batch = SyncBatch {
+        device_id: cfg.device_id.clone(),
+        agent_version: crate::AGENT_VERSION.into(),
+        events: events.clone(),
+    };
+    let url = format!(
+        "{}/api/v1/events/batch",
+        cfg.server_url.trim_end_matches('/')
+    );
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()?;
     match client.post(&url).json(&batch).send() {
         Ok(resp) if resp.status().is_success() => {
             let ack: SyncAck = resp.json().context("decode ack")?;
-            let acked: Vec<EventId> = ack.accepted.into_iter().chain(ack.duplicates.into_iter()).collect();
+            let acked: Vec<EventId> = ack
+                .accepted
+                .into_iter()
+                .chain(ack.duplicates.into_iter())
+                .collect();
             crate::db::mark_sent(&conn, &acked)?;
             crate::db::set_sync_success(&conn, &cfg.server_url)?;
-            println!("synced {} events; rejected={}", acked.len(), ack.rejected.len());
+            println!(
+                "synced {} events; rejected={}",
+                acked.len(),
+                ack.rejected.len()
+            );
         }
         Ok(resp) => {
-            let s = format!("HTTP {}: {}", resp.status(), resp.text().unwrap_or_default());
+            let s = format!(
+                "HTTP {}: {}",
+                resp.status(),
+                resp.text().unwrap_or_default()
+            );
             crate::db::set_sync_error(&conn, &cfg.server_url, &s)?;
             anyhow::bail!(s);
         }
@@ -80,7 +104,10 @@ pub fn cmd_sync_once(cfg: AgentConfig) -> Result<()> {
 }
 
 pub fn cmd_run(cfg: AgentConfig) -> Result<()> {
-    println!("playora-agent run — heartbeat every {}s, sync every {}s", 60, cfg.sync_interval_seconds);
+    println!(
+        "playora-agent run — heartbeat every {}s, sync every {}s",
+        60, cfg.sync_interval_seconds
+    );
     loop {
         let _ = cmd_heartbeat(cfg.clone());
         if let Err(e) = cmd_sync_once(cfg.clone()) {
@@ -91,10 +118,17 @@ pub fn cmd_run(cfg: AgentConfig) -> Result<()> {
 }
 
 fn free_disk_mb(paths: &[String]) -> u64 {
-    paths.iter().filter_map(|p| {
-        let snap = crate::hw::snapshot();
-        snap.disks.into_iter().find(|d| p.starts_with(&d.mount)).map(|d| d.free_bytes / 1024 / 1024)
-    }).next().unwrap_or(0)
+    paths
+        .iter()
+        .filter_map(|p| {
+            let snap = crate::hw::snapshot();
+            snap.disks
+                .into_iter()
+                .find(|d| p.starts_with(&d.mount))
+                .map(|d| d.free_bytes / 1024 / 1024)
+        })
+        .next()
+        .unwrap_or(0)
 }
 
 fn wifi_connected() -> bool {

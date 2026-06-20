@@ -4,39 +4,107 @@ use chrono::Utc;
 
 pub async fn page(AxState(state): AxState<State>) -> Html<String> {
     let conn = state.lock().await;
-    let devices: i64 = conn.query_row("SELECT COUNT(*) FROM devices", [], |r| r.get(0)).unwrap_or(0);
-    let events: i64 = conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0)).unwrap_or(0);
-    let sessions: i64 = conn.query_row("SELECT COUNT(*) FROM game_sessions", [], |r| r.get(0)).unwrap_or(0);
-    let last_hb: String = conn.query_row("SELECT received_at FROM heartbeats ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap_or_else(|_| "—".into());
-    let snapshots: i64 = conn.query_row("SELECT COUNT(*) FROM hardware_snapshots", [], |r| r.get(0)).unwrap_or(0);
-    let samples: i64 = conn.query_row("SELECT COUNT(*) FROM resource_samples", [], |r| r.get(0)).unwrap_or(0);
-    let downloads: i64 = conn.query_row("SELECT COUNT(*) FROM downloads", [], |r| r.get(0)).unwrap_or(0);
+    let devices: i64 = conn
+        .query_row("SELECT COUNT(*) FROM devices", [], |r| r.get(0))
+        .unwrap_or(0);
+    let events: i64 = conn
+        .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
+        .unwrap_or(0);
+    let sessions: i64 = conn
+        .query_row("SELECT COUNT(*) FROM game_sessions", [], |r| r.get(0))
+        .unwrap_or(0);
+    let last_hb: String = conn
+        .query_row(
+            "SELECT received_at FROM heartbeats ORDER BY id DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|_| "—".into());
+    let snapshots: i64 = conn
+        .query_row("SELECT COUNT(*) FROM hardware_snapshots", [], |r| r.get(0))
+        .unwrap_or(0);
+    let samples: i64 = conn
+        .query_row("SELECT COUNT(*) FROM resource_samples", [], |r| r.get(0))
+        .unwrap_or(0);
+    let downloads: i64 = conn
+        .query_row("SELECT COUNT(*) FROM downloads", [], |r| r.get(0))
+        .unwrap_or(0);
 
     let mut ranking_html = String::new();
     let mut stmt = conn.prepare("SELECT game_name, system, SUM(duration_seconds) FROM game_sessions WHERE game_name IS NOT NULL GROUP BY game_name, system ORDER BY 3 DESC LIMIT 10").unwrap();
-    let rows = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,i64>(2)?))).unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .unwrap();
     for row in rows.flatten() {
-        ranking_html.push_str(&format!("<tr><td>{}</td><td>{}</td><td>{}s</td></tr>", esc(&row.0), esc(&row.1), row.2));
+        ranking_html.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td><td>{}s</td></tr>",
+            esc(&row.0),
+            esc(&row.1),
+            row.2
+        ));
     }
-    if ranking_html.is_empty() { ranking_html.push_str("<tr><td colspan=3>no sessions yet</td></tr>"); }
+    if ranking_html.is_empty() {
+        ranking_html.push_str("<tr><td colspan=3>no sessions yet</td></tr>");
+    }
 
     let mut devices_html = String::new();
     let mut stmt = conn.prepare("SELECT device_id, device_name, device_profile, last_seen_at FROM devices ORDER BY last_seen_at DESC LIMIT 25").unwrap();
-    let rows = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1).unwrap_or_default(), r.get::<_,String>(2).unwrap_or_default(), r.get::<_,String>(3).unwrap_or_default()))).unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1).unwrap_or_default(),
+                r.get::<_, String>(2).unwrap_or_default(),
+                r.get::<_, String>(3).unwrap_or_default(),
+            ))
+        })
+        .unwrap();
     for row in rows.flatten() {
-        devices_html.push_str(&format!("<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>", esc(&row.0), esc(&row.1), esc(&row.2), esc(&row.3)));
+        devices_html.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            esc(&row.0),
+            esc(&row.1),
+            esc(&row.2),
+            esc(&row.3)
+        ));
     }
-    if devices_html.is_empty() { devices_html.push_str("<tr><td colspan=4>no devices yet</td></tr>"); }
+    if devices_html.is_empty() {
+        devices_html.push_str("<tr><td colspan=4>no devices yet</td></tr>");
+    }
 
     let mut events_html = String::new();
     let mut stmt = conn.prepare("SELECT event_id, device_id, event_type, received_at FROM events ORDER BY id DESC LIMIT 20").unwrap();
-    let rows = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,String>(2)?, r.get::<_,String>(3)?))).unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })
+        .unwrap();
     for row in rows.flatten() {
-        events_html.push_str(&format!("<tr><td><code>{}</code></td><td><code>{}</code></td><td>{}</td><td>{}</td></tr>", esc(&row.0), esc(&row.1), esc(&row.2), esc(&row.3)));
+        events_html.push_str(&format!(
+            "<tr><td><code>{}</code></td><td><code>{}</code></td><td>{}</td><td>{}</td></tr>",
+            esc(&row.0),
+            esc(&row.1),
+            esc(&row.2),
+            esc(&row.3)
+        ));
     }
-    if events_html.is_empty() { events_html.push_str("<tr><td colspan=4>no events yet</td></tr>"); }
+    if events_html.is_empty() {
+        events_html.push_str("<tr><td colspan=4>no events yet</td></tr>");
+    }
 
-    let html = format!(r#"<!doctype html>
+    let html = format!(
+        r#"<!doctype html>
 <html><head><meta charset="utf-8"><title>Playora Hub</title>
 <meta http-equiv="refresh" content="10">
 <style>
@@ -89,5 +157,7 @@ pub async fn page(AxState(state): AxState<State>) -> Html<String> {
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }

@@ -28,7 +28,10 @@ pub fn fetch(cfg: &AgentConfig, req: &DownloadRequest<'_>) -> Result<DownloadOut
     let dest_dir = Path::new(roms_root).join(sys_spec.folder);
     std::fs::create_dir_all(&dest_dir)?;
 
-    let filename = req.filename.map(ToOwned::to_owned).unwrap_or_else(|| infer_filename(req.url));
+    let filename = req
+        .filename
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| infer_filename(req.url));
     if filename.contains('/') || filename.contains("..") {
         return Err(anyhow!("invalid filename: {}", filename));
     }
@@ -40,7 +43,10 @@ pub fn fetch(cfg: &AgentConfig, req: &DownloadRequest<'_>) -> Result<DownloadOut
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()?;
-    let mut resp = client.get(req.url).send().with_context(|| format!("GET {}", req.url))?;
+    let mut resp = client
+        .get(req.url)
+        .send()
+        .with_context(|| format!("GET {}", req.url))?;
     if !resp.status().is_success() {
         return Err(anyhow!("HTTP {}", resp.status()));
     }
@@ -50,7 +56,8 @@ pub fn fetch(cfg: &AgentConfig, req: &DownloadRequest<'_>) -> Result<DownloadOut
         if free < len + MIN_FREE_MARGIN {
             return Err(anyhow!(
                 "insufficient free space: have {}B, need >= {}B",
-                free, len + MIN_FREE_MARGIN
+                free,
+                len + MIN_FREE_MARGIN
             ));
         }
     }
@@ -62,7 +69,9 @@ pub fn fetch(cfg: &AgentConfig, req: &DownloadRequest<'_>) -> Result<DownloadOut
     let mut total: u64 = 0;
     loop {
         let n = resp.read(&mut buf)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         hasher.update(&buf[..n]);
         out.write_all(&buf[..n])?;
         total += n as u64;
@@ -74,17 +83,35 @@ pub fn fetch(cfg: &AgentConfig, req: &DownloadRequest<'_>) -> Result<DownloadOut
     if let Some(expected) = req.expected_sha256 {
         if !expected.eq_ignore_ascii_case(&actual) {
             let _ = std::fs::remove_file(&tmp);
-            return Err(anyhow!("sha256 mismatch: expected={} got={}", expected, actual));
+            return Err(anyhow!(
+                "sha256 mismatch: expected={} got={}",
+                expected,
+                actual
+            ));
         }
     }
     std::fs::rename(&tmp, &dest)?;
-    Ok(DownloadOutcome { path: dest, bytes: total, sha256: actual })
+    Ok(DownloadOutcome {
+        path: dest,
+        bytes: total,
+        sha256: actual,
+    })
 }
 
 fn infer_filename(url: &str) -> String {
-    let trimmed = url.split('?').next().unwrap_or(url).split('#').next().unwrap_or(url);
+    let trimmed = url
+        .split('?')
+        .next()
+        .unwrap_or(url)
+        .split('#')
+        .next()
+        .unwrap_or(url);
     let last = trimmed.rsplit('/').next().unwrap_or("download.bin");
-    if last.is_empty() { "download.bin".into() } else { last.into() }
+    if last.is_empty() {
+        "download.bin".into()
+    } else {
+        last.into()
+    }
 }
 
 fn free_bytes(p: &Path) -> Option<u64> {
@@ -92,11 +119,28 @@ fn free_bytes(p: &Path) -> Option<u64> {
     use std::os::raw::c_char;
     #[repr(C)]
     #[derive(Default)]
-    struct S { f_bsize: u64, f_frsize: u64, f_blocks: u64, f_bfree: u64, f_bavail: u64, f_files: u64, f_ffree: u64, f_favail: u64, f_fsid: u64, f_flag: u64, f_namemax: u64, f_pad: [u32; 32] }
-    extern "C" { fn statvfs(p: *const c_char, b: *mut S) -> i32; }
+    struct S {
+        f_bsize: u64,
+        f_frsize: u64,
+        f_blocks: u64,
+        f_bfree: u64,
+        f_bavail: u64,
+        f_files: u64,
+        f_ffree: u64,
+        f_favail: u64,
+        f_fsid: u64,
+        f_flag: u64,
+        f_namemax: u64,
+        f_pad: [u32; 32],
+    }
+    extern "C" {
+        fn statvfs(p: *const c_char, b: *mut S) -> i32;
+    }
     let cp = CString::new(p.to_string_lossy().to_string()).ok()?;
     let mut s = S::default();
-    if unsafe { statvfs(cp.as_ptr(), &mut s) } != 0 { return None; }
+    if unsafe { statvfs(cp.as_ptr(), &mut s) } != 0 {
+        return None;
+    }
     Some(s.f_bavail * s.f_frsize)
 }
 
@@ -107,7 +151,10 @@ mod tests {
     #[test]
     fn infer_basic() {
         assert_eq!(infer_filename("https://x/y/Pokemon.zip"), "Pokemon.zip");
-        assert_eq!(infer_filename("https://x/y/Pokemon.zip?token=abc"), "Pokemon.zip");
+        assert_eq!(
+            infer_filename("https://x/y/Pokemon.zip?token=abc"),
+            "Pokemon.zip"
+        );
         assert_eq!(infer_filename("https://x/"), "download.bin");
     }
 }

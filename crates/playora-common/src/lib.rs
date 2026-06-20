@@ -2,8 +2,8 @@
 //!
 //! All wire types are JSON-serializable, stable, and free of secrets.
 
-pub mod systems;
 pub mod sources;
+pub mod systems;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -54,7 +54,11 @@ macro_rules! string_id {
                 f.write_str(&self.0)
             }
         }
-        impl Default for $name { fn default() -> Self { Self::new() } }
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
     };
 }
 
@@ -163,7 +167,7 @@ pub struct UsbDevice {
 pub struct HardwareTestResult {
     pub test_id: TestId,
     pub test_type: String,
-    pub status: String,     // pass | fail | warn | skipped
+    pub status: String, // pass | fail | warn | skipped
     pub score: Option<f32>,
     pub payload: serde_json::Value,
     pub error: Option<String>,
@@ -197,35 +201,54 @@ pub struct ProcessSample {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum GameSystem {
-    Nes, Snes, Gb, Gbc, Gba, Genesis, Megadrive, N64, Psx, Psp,
-    Dreamcast, Saturn, Atari2600, Atari7800, Arcade, Mame, NeoGeo,
-    PcEngine, MasterSystem, GameGear, Wonderswan, Other,
+    Nes,
+    Snes,
+    Gb,
+    Gbc,
+    Gba,
+    Genesis,
+    Megadrive,
+    N64,
+    Psx,
+    Psp,
+    Dreamcast,
+    Saturn,
+    Atari2600,
+    Atari7800,
+    Arcade,
+    Mame,
+    NeoGeo,
+    PcEngine,
+    MasterSystem,
+    GameGear,
+    Wonderswan,
+    Other,
 }
 
 impl GameSystem {
     pub fn from_folder(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "nes" | "famicom"     => Self::Nes,
-            "snes" | "supernes"   => Self::Snes,
-            "gb"                  => Self::Gb,
-            "gbc"                 => Self::Gbc,
-            "gba"                 => Self::Gba,
+            "nes" | "famicom" => Self::Nes,
+            "snes" | "supernes" => Self::Snes,
+            "gb" => Self::Gb,
+            "gbc" => Self::Gbc,
+            "gba" => Self::Gba,
             "genesis" | "megadrive" => Self::Megadrive,
-            "n64"                 => Self::N64,
-            "psx"                 => Self::Psx,
-            "psp"                 => Self::Psp,
-            "dreamcast"           => Self::Dreamcast,
-            "saturn"              => Self::Saturn,
-            "atari2600"           => Self::Atari2600,
-            "atari7800"           => Self::Atari7800,
-            "arcade"              => Self::Arcade,
-            "mame" | "mame2003"   => Self::Mame,
-            "neogeo"              => Self::NeoGeo,
-            "pcengine"            => Self::PcEngine,
-            "mastersystem"        => Self::MasterSystem,
-            "gamegear"            => Self::GameGear,
-            "wonderswan"          => Self::Wonderswan,
-            _                     => Self::Other,
+            "n64" => Self::N64,
+            "psx" => Self::Psx,
+            "psp" => Self::Psp,
+            "dreamcast" => Self::Dreamcast,
+            "saturn" => Self::Saturn,
+            "atari2600" => Self::Atari2600,
+            "atari7800" => Self::Atari7800,
+            "arcade" => Self::Arcade,
+            "mame" | "mame2003" => Self::Mame,
+            "neogeo" => Self::NeoGeo,
+            "pcengine" => Self::PcEngine,
+            "mastersystem" => Self::MasterSystem,
+            "gamegear" => Self::GameGear,
+            "wonderswan" => Self::Wonderswan,
+            _ => Self::Other,
         }
     }
 }
@@ -333,7 +356,12 @@ pub struct SyncAck {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum FeatureStatus { Enabled, Disabled, Locked, Planned }
+pub enum FeatureStatus {
+    Enabled,
+    Disabled,
+    Locked,
+    Planned,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureFlag {
@@ -367,8 +395,14 @@ pub struct CapabilityReport {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CatalogType {
-    HomebrewGame, DemoAuthorized, OpenSourceGame, PublicDomain,
-    MetadataPack, Theme, ConfigPack, PatchAllowed,
+    HomebrewGame,
+    DemoAuthorized,
+    OpenSourceGame,
+    PublicDomain,
+    MetadataPack,
+    Theme,
+    ConfigPack,
+    PatchAllowed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -455,7 +489,9 @@ impl Default for AgentConfig {
 pub fn sha256_hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes { write!(&mut s, "{b:02x}").unwrap(); }
+    for b in bytes {
+        write!(&mut s, "{b:02x}").unwrap();
+    }
     s
 }
 
@@ -473,7 +509,15 @@ mod core_tests {
 
     #[test]
     fn game_system_round_trip_folder() {
-        for f in ["nes","snes","gba","n64","psx","arcade","unknown_other"] {
+        for f in [
+            "nes",
+            "snes",
+            "gba",
+            "n64",
+            "psx",
+            "arcade",
+            "unknown_other",
+        ] {
             let s = GameSystem::from_folder(f);
             if f != "unknown_other" {
                 assert_ne!(s, GameSystem::Other, "{f}");
@@ -483,8 +527,14 @@ mod core_tests {
 
     #[test]
     fn device_profile_detect() {
-        assert_eq!(DeviceProfile::detect_from("G80CA-MB V1.2-20250422 Panel 8"), DeviceProfile::R36sDarkosreClone);
-        assert_eq!(DeviceProfile::detect_from(""), DeviceProfile::UnknownLinuxHandheld);
+        assert_eq!(
+            DeviceProfile::detect_from("G80CA-MB V1.2-20250422 Panel 8"),
+            DeviceProfile::R36sDarkosreClone
+        );
+        assert_eq!(
+            DeviceProfile::detect_from(""),
+            DeviceProfile::UnknownLinuxHandheld
+        );
     }
 
     #[test]
