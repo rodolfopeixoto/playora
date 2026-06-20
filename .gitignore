@@ -1,0 +1,10 @@
+/target
+/target-arm64
+/dist
+**/*.rs.bk
+*.swp
+.DS_Store
+server.db
+*.db
+*.db-shm
+*.db-wal
