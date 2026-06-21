@@ -317,6 +317,44 @@ pub async fn ranking_playtime(AxState(state): AxState<State>) -> Json<Vec<Value>
     Json(rows.flatten().collect())
 }
 
+pub async fn analytics_overview(AxState(state): AxState<State>) -> Json<Value> {
+    let conn = state.lock().await;
+    let devices: i64 = conn
+        .query_row("SELECT COUNT(*) FROM devices", [], |r| r.get(0))
+        .unwrap_or(0);
+    let total_play: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(duration_seconds),0) FROM game_sessions",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let sessions: i64 = conn
+        .query_row("SELECT COUNT(*) FROM game_sessions", [], |r| r.get(0))
+        .unwrap_or(0);
+    let unique_games: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT game_name) FROM game_sessions WHERE game_name IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let unique_systems: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT system) FROM game_sessions WHERE system IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    Json(serde_json::json!({
+        "devices": devices,
+        "sessions": sessions,
+        "total_playtime_seconds": total_play,
+        "unique_games": unique_games,
+        "unique_systems": unique_systems,
+    }))
+}
+
 pub async fn ranking_systems(AxState(state): AxState<State>) -> Json<Vec<Value>> {
     let conn = state.lock().await;
     let mut stmt = conn.prepare("SELECT system, SUM(duration_seconds) total FROM game_sessions GROUP BY system ORDER BY total DESC").unwrap();

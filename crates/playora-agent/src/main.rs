@@ -15,6 +15,7 @@ mod restore;
 mod saves;
 mod scanner;
 mod selfupdate;
+mod showlog;
 mod sync;
 mod tests;
 mod tui;
@@ -142,6 +143,8 @@ enum Cmd {
         #[arg(long)]
         keep_tar: bool,
     },
+    /// Show a log file in a scrollable TUI (use as: ports script post-step)
+    ShowLog { file: String },
 }
 
 #[derive(Subcommand)]
@@ -491,6 +494,7 @@ fn main() -> Result<()> {
             }
         },
         Cmd::RestoreTar { keep_tar } => restore::cmd(keep_tar),
+        Cmd::ShowLog { file } => showlog::cmd(std::path::Path::new(&file)),
     }
 }
 

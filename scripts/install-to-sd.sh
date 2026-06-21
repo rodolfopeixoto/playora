@@ -1,7 +1,4 @@
 #!/bin/sh
-# install-to-sd: drop binary + agent.toml + Ports menu .sh files onto the mounted
-# dArkOSRE SD. Each .sh uses the proper "stop ES, run with TTY, restart ES"
-# pattern so output is visible on the framebuffer.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/dist/playora-agent-aarch64"
@@ -15,30 +12,38 @@ PORTS_DIR="$SD/ports"
 LOG_DIR="$SD/.playora/logs"
 mkdir -p "$PLAYORA_DIR" "$PORTS_DIR" "$LOG_DIR"
 
-echo "[install] copying agent binary"
 cp "$BIN" "$PLAYORA_DIR/playora-agent"
 chmod 0755 "$PLAYORA_DIR/playora-agent"
 
-# Each .sh runs the agent with proper TTY + ES restart pattern.
-# Args:
-#  $1 = port display name (used for .sh filename)
-#  $2 = mode: "tui" (interactive, stop ES), "task" (run, show output, pause)
-#  $3 = command + args passed to playora-agent
 write_port() {
     name="$1"; mode="$2"; cmd="$3"
     file="$PORTS_DIR/Playora ${name}.sh"
-    safe_name="$(echo "$name" | tr ' ' '_')"
+    safe_name="$(echo "$name" | tr ' ' _)"
 
     if [ "$mode" = "tui" ]; then
         cat > "$file" <<EOF
 #!/bin/bash
 LOG="/roms/.playora/logs/${safe_name}_\$(date +%Y%m%d_%H%M%S).log"
 mkdir -p /roms/.playora/logs
+BIN=/roms/.playora/playora-agent
+CFG=/roms/.playora/agent.toml
 
 sudo systemctl stop emulationstation 2>/dev/null
 sudo killall -9 emulationstation 2>/dev/null
 sudo killall -9 retroarch 2>/dev/null
 sleep 1
+
+CTL=""
+for c in /opt/system/PortMaster /opt/portmaster /roms/tools/PortMaster /roms2/tools/PortMaster; do
+    if [ -x "\$c/gptokeyb" ]; then CTL="\$c"; break; fi
+done
+if [ -n "\$CTL" ]; then
+    sudo chmod 666 /dev/uinput 2>/dev/null || true
+    KEYS="\$CTL/keys.gptk"
+    [ -f "\$KEYS" ] || KEYS=""
+    \$CTL/gptokeyb -1 "playora-agent" \${KEYS:+-c "\$KEYS"} >/dev/null 2>&1 &
+    GPID=\$!
+fi
 
 TTY=/dev/tty1
 [ -w "\$TTY" ] || TTY=/dev/console
@@ -46,11 +51,11 @@ TTY=/dev/tty1
 {
     clear
     cd /roms/.playora
-    ./playora-agent --config /roms/.playora/agent.toml ${cmd} 2>&1 | tee -a "\$LOG"
-    echo
-    echo "==== Aperte qualquer botão pra voltar ao EmulationStation ===="
-    read -n 1 -s
+    ./playora-agent --config \$CFG ${cmd} 2>&1 | tee -a "\$LOG"
 } <"\$TTY" >"\$TTY" 2>&1
+
+[ -n "\${GPID:-}" ] && kill -9 \$GPID 2>/dev/null || true
+sudo killall -9 gptokeyb 2>/dev/null || true
 
 sudo systemctl start emulationstation 2>/dev/null \\
     || sudo systemctl restart emulationstation 2>/dev/null \\
@@ -62,57 +67,65 @@ EOF
 #!/bin/bash
 LOG="/roms/.playora/logs/${safe_name}_\$(date +%Y%m%d_%H%M%S).log"
 mkdir -p /roms/.playora/logs
+BIN=/roms/.playora/playora-agent
+CFG=/roms/.playora/agent.toml
 
 {
     echo "==== \$(date) ===="
+    echo "Command: ${cmd}"
+    echo
     cd /roms/.playora
-    ./playora-agent --config /roms/.playora/agent.toml ${cmd}
+    ./playora-agent --config \$CFG ${cmd}
     echo
     echo "Exit code: \$?"
 } > "\$LOG" 2>&1
 
-TTY=/dev/tty1
-[ -w "\$TTY" ] || TTY=/dev/console
+sudo systemctl stop emulationstation 2>/dev/null
+sudo killall -9 emulationstation 2>/dev/null
+sleep 1
 
-if command -v whiptail >/dev/null 2>&1; then
-    sudo killall -STOP emulationstation 2>/dev/null
-    whiptail --title "Playora — ${name}" --textbox "\$LOG" 22 78 <"\$TTY" >"\$TTY" 2>&1
-    sudo killall -CONT emulationstation 2>/dev/null
-elif command -v dialog >/dev/null 2>&1; then
-    sudo killall -STOP emulationstation 2>/dev/null
-    dialog --title "Playora — ${name}" --textbox "\$LOG" 22 78 <"\$TTY" >"\$TTY" 2>&1
-    sudo killall -CONT emulationstation 2>/dev/null
-else
-    sudo killall -STOP emulationstation 2>/dev/null
-    {
-        clear
-        echo "==== Playora — ${name} ===="
-        echo
-        cat "\$LOG"
-        echo
-        echo "==== Aperte qualquer botão ===="
-        read -n 1 -s
-    } <"\$TTY" >"\$TTY" 2>&1
-    sudo killall -CONT emulationstation 2>/dev/null
+CTL=""
+for c in /opt/system/PortMaster /opt/portmaster /roms/tools/PortMaster /roms2/tools/PortMaster; do
+    if [ -x "\$c/gptokeyb" ]; then CTL="\$c"; break; fi
+done
+if [ -n "\$CTL" ]; then
+    sudo chmod 666 /dev/uinput 2>/dev/null || true
+    KEYS="\$CTL/keys.gptk"
+    [ -f "\$KEYS" ] || KEYS=""
+    \$CTL/gptokeyb -1 "playora-agent" \${KEYS:+-c "\$KEYS"} >/dev/null 2>&1 &
+    GPID=\$!
 fi
 
+TTY=/dev/tty1
+[ -w "\$TTY" ] || TTY=/dev/console
+{
+    cd /roms/.playora
+    ./playora-agent --config \$CFG show-log "\$LOG"
+} <"\$TTY" >"\$TTY" 2>&1
+
+[ -n "\${GPID:-}" ] && kill -9 \$GPID 2>/dev/null || true
+sudo killall -9 gptokeyb 2>/dev/null || true
+
 cd /roms/.playora && ./playora-agent --config ./agent.toml sync >/dev/null 2>&1 || true
+
+sudo systemctl start emulationstation 2>/dev/null \\
+    || sudo systemctl restart emulationstation 2>/dev/null \\
+    || (cd /; nohup sudo -u ark emulationstation >/dev/null 2>&1 &) \\
+    || (cd /; nohup emulationstation >/dev/null 2>&1 &)
 EOF
     fi
     chmod 0755 "$file"
     echo "[install] wrote ${file}"
 }
 
-# Menu entries
 write_port "Hub"             "tui"  "tui"
 write_port "PortMaster"      "tui"  "tui"
 write_port "Restore Backup"  "tui"  "restore-tar"
+write_port "Update"          "tui"  "self-update"
 write_port "Doctor"          "task" "doctor"
 write_port "Hardware"        "task" "hardware snapshot --save"
-write_port "Update"          "tui"  "self-update"
 write_port "Saves Backup"    "task" "saves upload"
 
-# First-run config (only if missing)
 CFG="$PLAYORA_DIR/agent.toml"
 if [ ! -f "$CFG" ]; then
     SERVER_URL="${PLAYORA_SERVER_URL:-http://192.168.3.82:8080}"
@@ -137,28 +150,61 @@ enable_hardware_tests = true
 enable_resource_sampling = true
 log_level = "info"
 EOF
-    echo "[install] wrote config: $CFG (server=$SERVER_URL)"
+    echo "[install] wrote config: $CFG"
 fi
 
-# Remove broken legacy vendor scripts (clone firmware leftovers)
-LEGACY_SCRIPTS="
-$SD/tools/R36S-Backup.sh
-$SD/tools/R36S-Search.sh
-$SD/tools/R36S-Install-Collections.sh
-$SD/tools/R36S-Smart.sh
-$SD/tools/R36S-Storage.sh
-"
-for s in $LEGACY_SCRIPTS; do
-    if [ -f "$s" ]; then
-        mv "$s" "$s.disabled" 2>/dev/null || true
-        echo "[install] disabled legacy script: $s"
-    fi
+for s in "$SD/tools/R36S-Backup.sh" "$SD/tools/R36S-Search.sh" "$SD/tools/R36S-Install-Collections.sh" "$SD/tools/R36S-Smart.sh" "$SD/tools/R36S-Storage.sh"; do
+    [ -f "$s" ] && mv "$s" "$s.disabled" 2>/dev/null && echo "[install] disabled $s"
 done
+
+find "$SD" -name "._*" -delete 2>/dev/null || true
+find "$SD" -name ".DS_Store" -delete 2>/dev/null || true
+
+cat > "$PLAYORA_DIR/autostart.sh" <<'EOF'
+#!/bin/sh
+mkdir -p /roms/.playora/logs
+nohup /roms/.playora/playora-agent --config /roms/.playora/agent.toml run \
+    > /roms/.playora/logs/run.log 2>&1 &
+echo $! > /tmp/playora-agent.pid
+EOF
+chmod 0755 "$PLAYORA_DIR/autostart.sh"
+
+cat > "$PORTS_DIR/Playora Autosync Enable.sh" <<EOF
+#!/bin/bash
+LOG="/roms/.playora/logs/autosync_enable_\$(date +%Y%m%d_%H%M%S).log"
+{
+    /roms/.playora/autostart.sh
+    AUTOSTART_DIR="/storage/.config/autostart"
+    [ -d "\$AUTOSTART_DIR" ] || AUTOSTART_DIR="/etc/runlevels/default"
+    [ -d "\$AUTOSTART_DIR" ] || sudo mkdir -p /etc/playora && AUTOSTART_DIR="/etc/playora"
+    sudo cp /roms/.playora/autostart.sh "\$AUTOSTART_DIR/playora.sh" 2>/dev/null
+    sudo chmod 0755 "\$AUTOSTART_DIR/playora.sh" 2>/dev/null
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo tee /etc/systemd/system/playora-agent.service > /dev/null <<UNIT
+[Unit]
+Description=Playora agent
+After=network-online.target
+[Service]
+ExecStart=/roms/.playora/playora-agent --config /roms/.playora/agent.toml run
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/roms/.playora/logs/run.log
+StandardError=append:/roms/.playora/logs/run.log
+[Install]
+WantedBy=multi-user.target
+UNIT
+        sudo systemctl daemon-reload
+        sudo systemctl enable --now playora-agent.service
+    fi
+    echo "autosync enabled at \$AUTOSTART_DIR"
+    /roms/.playora/playora-agent --config /roms/.playora/agent.toml status
+} > "\$LOG" 2>&1
+TTY=/dev/tty1
+[ -w "\$TTY" ] || TTY=/dev/console
+{ /roms/.playora/playora-agent --config /roms/.playora/agent.toml show-log "\$LOG"; } <"\$TTY" >"\$TTY" 2>&1
+EOF
+chmod 0755 "$PORTS_DIR/Playora Autosync Enable.sh"
 
 sync
 echo
-echo "============================================================"
-echo "  Playora installed."
-echo "  Eject SD, boot R36S, ES → Ports → Playora Hub"
-echo "  Logs at: /roms/.playora/logs/"
-echo "============================================================"
+echo "Playora installed. Eject SD, boot R36S, ES → Ports → Playora Hub"

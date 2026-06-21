@@ -68,7 +68,12 @@ async fn main() -> Result<()> {
         .route("/api/v1/sources", get(routes::sources_list))
         .route("/api/v1/systems", get(routes::systems_list))
         .route("/api/v1/saves/upload", post(routes::saves_upload))
+        .route(
+            "/api/v1/analytics/overview",
+            get(routes::analytics_overview),
+        )
         .route("/dashboard", get(dashboard::page))
+        .route("/dashboard/device/:id", get(dashboard::device_page))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
 
