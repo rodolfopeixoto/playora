@@ -4,43 +4,73 @@ use playora_common::*;
 use std::time::Duration;
 
 pub fn cmd_doctor(cfg: AgentConfig, _interactive: bool) -> Result<()> {
-    let conn = crate::db::open(&crate::cfg::db_path());
-    println!("config:   {}", crate::cfg::config_path().display());
-    println!(
-        "db:       {}  {}",
-        crate::cfg::db_path().display(),
-        if conn.is_ok() { "OK" } else { "FAIL" }
-    );
-
-    // network probe
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()?;
-    let url = format!("{}/health", cfg.server_url.trim_end_matches('/'));
-    match client.get(&url).send() {
-        Ok(r) => println!("server:   {} -> HTTP {}", url, r.status()),
-        Err(e) => println!("server:   {} -> ERROR {e}", url),
+    use std::io::Write;
+    fn flush() {
+        std::io::stdout().flush().ok();
     }
 
-    // proc
+    println!("Playora Doctor — quick diagnostics");
+    println!();
+
+    print!("[1/6] device_id ............ ");
+    flush();
+    println!("{}", cfg.device_id);
+
+    print!("[2/6] config path .......... ");
+    flush();
+    println!("{}", crate::cfg::config_path().display());
+
+    print!("[3/6] sqlite db ............ ");
+    flush();
+    let conn = crate::db::open(&crate::cfg::db_path());
+    println!("{}", if conn.is_ok() { "OK" } else { "FAIL" });
+
+    print!("[4/6] /proc/cpuinfo ........ ");
+    flush();
     println!(
-        "/proc:    {}",
+        "{}",
         if std::path::Path::new("/proc/cpuinfo").exists() {
             "OK"
         } else {
-            "absent"
+            "absent (dev host?)"
         }
     );
+
+    print!("[5/6] reaching server ({}) ", cfg.server_url);
+    flush();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()?;
+    let url = format!("{}/health", cfg.server_url.trim_end_matches('/'));
+    match client.get(&url).send() {
+        Ok(r) => println!("→ HTTP {}", r.status()),
+        Err(e) => println!("→ ERROR ({})", short_err(&e.to_string())),
+    }
+
+    print!("[6/6] hardware snapshot .... ");
+    flush();
     let snap = crate::hw::snapshot();
-    println!("cpu:      {} cores ({})", snap.cpu_cores, snap.cpu_model);
-    println!("mem:      {}MB total", snap.mem_total_mb);
+    println!("{} cores, {}MB RAM", snap.cpu_cores, snap.mem_total_mb);
+
+    println!();
     let pending = conn
         .ok()
         .and_then(|c| crate::db::count_pending(&c).ok())
         .unwrap_or(0);
-    println!("pending:  {pending} events");
-
+    println!("pending events:  {pending}");
+    println!("agent version:   {}", env!("CARGO_PKG_VERSION"));
+    println!();
+    println!("Done.");
     Ok(())
+}
+
+fn short_err(e: &str) -> String {
+    let mut s = e.to_string();
+    if s.len() > 60 {
+        s.truncate(60);
+        s.push('…');
+    }
+    s
 }
 
 pub fn cmd_test_session(cfg: AgentConfig, system: &str, game: &str, duration: u64) -> Result<()> {

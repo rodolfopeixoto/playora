@@ -20,13 +20,30 @@ write_port() {
     file="$PORTS_DIR/Playora ${name}.sh"
     safe_name="$(echo "$name" | tr ' ' _)"
 
-    if [ "$mode" = "tui" ]; then
-        cat > "$file" <<EOF
+    cat > "$file" <<EOF
 #!/bin/bash
 LOG="/roms/.playora/logs/${safe_name}_\$(date +%Y%m%d_%H%M%S).log"
 mkdir -p /roms/.playora/logs
 BIN=/roms/.playora/playora-agent
 CFG=/roms/.playora/agent.toml
+MODE="${mode}"
+TIMEOUT_SECS=300
+
+restart_es() {
+    sudo systemctl start emulationstation 2>/dev/null \\
+        || sudo systemctl restart emulationstation 2>/dev/null \\
+        || (cd /; nohup sudo -u ark emulationstation >/dev/null 2>&1 &) \\
+        || (cd /; nohup emulationstation >/dev/null 2>&1 &)
+}
+
+trap 'restart_es' EXIT INT TERM
+
+(
+    sleep \$TIMEOUT_SECS
+    echo "[playora-watchdog] timeout — forcing ES restart" >> "\$LOG"
+    restart_es
+) &
+WATCHDOG_PID=\$!
 
 sudo systemctl stop emulationstation 2>/dev/null
 sudo killall -9 emulationstation 2>/dev/null
@@ -48,72 +65,46 @@ fi
 TTY=/dev/tty1
 [ -w "\$TTY" ] || TTY=/dev/console
 
-{
-    clear
-    cd /roms/.playora
-    ./playora-agent --config \$CFG ${cmd} 2>&1 | tee -a "\$LOG"
-} <"\$TTY" >"\$TTY" 2>&1
+if [ "\$MODE" = "tui" ]; then
+    {
+        clear
+        echo "Playora — ${name}"
+        echo "Loading..."
+        cd /roms/.playora
+        ./playora-agent --config \$CFG ${cmd} 2>&1 | tee -a "\$LOG"
+        echo
+        echo "==== finished. press any button to return ===="
+        read -n 1 -s -t 30
+    } <"\$TTY" >"\$TTY" 2>&1
+else
+    {
+        echo "==== \$(date) ===="
+        echo "Command: ${cmd}"
+        echo
+        cd /roms/.playora
+        timeout 60 ./playora-agent --config \$CFG ${cmd}
+        echo
+        echo "Exit code: \$?"
+    } > "\$LOG" 2>&1
 
-[ -n "\${GPID:-}" ] && kill -9 \$GPID 2>/dev/null || true
-sudo killall -9 gptokeyb 2>/dev/null || true
+    {
+        cd /roms/.playora
+        timeout 120 ./playora-agent --config \$CFG show-log "\$LOG" || {
+            clear
+            cat "\$LOG"
+            echo
+            echo "==== press any button ===="
+            read -n 1 -s -t 30
+        }
+    } <"\$TTY" >"\$TTY" 2>&1
 
-sudo systemctl start emulationstation 2>/dev/null \\
-    || sudo systemctl restart emulationstation 2>/dev/null \\
-    || (cd /; nohup sudo -u ark emulationstation >/dev/null 2>&1 &) \\
-    || (cd /; nohup emulationstation >/dev/null 2>&1 &)
-EOF
-    else
-        cat > "$file" <<EOF
-#!/bin/bash
-LOG="/roms/.playora/logs/${safe_name}_\$(date +%Y%m%d_%H%M%S).log"
-mkdir -p /roms/.playora/logs
-BIN=/roms/.playora/playora-agent
-CFG=/roms/.playora/agent.toml
-
-{
-    echo "==== \$(date) ===="
-    echo "Command: ${cmd}"
-    echo
-    cd /roms/.playora
-    ./playora-agent --config \$CFG ${cmd}
-    echo
-    echo "Exit code: \$?"
-} > "\$LOG" 2>&1
-
-sudo systemctl stop emulationstation 2>/dev/null
-sudo killall -9 emulationstation 2>/dev/null
-sleep 1
-
-CTL=""
-for c in /opt/system/PortMaster /opt/portmaster /roms/tools/PortMaster /roms2/tools/PortMaster; do
-    if [ -x "\$c/gptokeyb" ]; then CTL="\$c"; break; fi
-done
-if [ -n "\$CTL" ]; then
-    sudo chmod 666 /dev/uinput 2>/dev/null || true
-    KEYS="\$CTL/keys.gptk"
-    [ -f "\$KEYS" ] || KEYS=""
-    \$CTL/gptokeyb -1 "playora-agent" \${KEYS:+-c "\$KEYS"} >/dev/null 2>&1 &
-    GPID=\$!
+    cd /roms/.playora && timeout 10 ./playora-agent --config \$CFG sync >/dev/null 2>&1 || true
 fi
 
-TTY=/dev/tty1
-[ -w "\$TTY" ] || TTY=/dev/console
-{
-    cd /roms/.playora
-    ./playora-agent --config \$CFG show-log "\$LOG"
-} <"\$TTY" >"\$TTY" 2>&1
-
+kill \$WATCHDOG_PID 2>/dev/null || true
 [ -n "\${GPID:-}" ] && kill -9 \$GPID 2>/dev/null || true
 sudo killall -9 gptokeyb 2>/dev/null || true
-
-cd /roms/.playora && ./playora-agent --config ./agent.toml sync >/dev/null 2>&1 || true
-
-sudo systemctl start emulationstation 2>/dev/null \\
-    || sudo systemctl restart emulationstation 2>/dev/null \\
-    || (cd /; nohup sudo -u ark emulationstation >/dev/null 2>&1 &) \\
-    || (cd /; nohup emulationstation >/dev/null 2>&1 &)
 EOF
-    fi
     chmod 0755 "$file"
     echo "[install] wrote ${file}"
 }

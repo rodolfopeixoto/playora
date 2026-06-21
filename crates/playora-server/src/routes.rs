@@ -115,6 +115,14 @@ pub async fn events_batch(
     Json(batch): Json<SyncBatch>,
 ) -> Json<SyncAck> {
     let conn = state.lock().await;
+    // Auto-register device on first sight
+    let now = Utc::now().to_rfc3339();
+    let _ = conn.execute(
+        "INSERT INTO devices(device_id, device_name, device_profile, os_family, agent_version, created_at, last_seen_at)
+         VALUES (?1, 'R36S', 'r36s-darkosre-clone', 'darkosre-r36', ?2, ?3, ?3)
+         ON CONFLICT(device_id) DO UPDATE SET last_seen_at=excluded.last_seen_at, agent_version=excluded.agent_version",
+        rusqlite::params![batch.device_id.0, batch.agent_version, now],
+    );
     let mut accepted = vec![];
     let mut duplicates = vec![];
     let mut rejected: Vec<(EventId, String)> = vec![];
@@ -143,6 +151,23 @@ pub async fn events_batch(
         match r {
             Ok(_) => {
                 accepted.push(ev.event_id.clone());
+                // capture hardware snapshot keyed by device_id so dashboard can render it
+                if let EventPayload::HardwareSnapshot(s) = &ev.payload {
+                    let _ = conn.execute(
+                        "INSERT INTO hardware_snapshots(device_id, payload_json, received_at) VALUES (?1, ?2, ?3)",
+                        rusqlite::params![ev.device_id.0, serde_json::to_string(&s).unwrap_or_default(), Utc::now().to_rfc3339()],
+                    );
+                } else if let EventPayload::DeviceHeartbeat(hb) = &ev.payload {
+                    let _ = conn.execute(
+                        "INSERT INTO heartbeats(device_id, wifi_connected, free_disk_mb, pending_events, received_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![ev.device_id.0, hb.wifi_connected as i32, hb.free_disk_mb as i64, hb.pending_events as i64, Utc::now().to_rfc3339()],
+                    );
+                } else if let EventPayload::ResourceSample(rs) = &ev.payload {
+                    let _ = conn.execute(
+                        "INSERT INTO resource_samples(device_id, payload_json, received_at) VALUES (?1, ?2, ?3)",
+                        rusqlite::params![ev.device_id.0, serde_json::to_string(&rs).unwrap_or_default(), Utc::now().to_rfc3339()],
+                    );
+                }
                 if let EventPayload::GameSessionStarted(g) = &ev.payload {
                     let _ = conn.execute(
                         "INSERT OR REPLACE INTO game_sessions(session_id,device_id,system,game_name,rom_hash,core,started_at,ended_at,duration_seconds,max_cpu_percent,max_memory_mb)
