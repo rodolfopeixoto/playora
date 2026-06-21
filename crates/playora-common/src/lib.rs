@@ -491,6 +491,13 @@ pub struct AgentConfig {
     pub enable_hardware_tests: bool,
     pub enable_resource_sampling: bool,
     pub log_level: String,
+    /// Scheduled jobs (UTC hour-of-day). 0..23 fires the job once per day; None disables.
+    #[serde(default)]
+    pub cloud_backup_daily_hour_utc: Option<u8>,
+    #[serde(default)]
+    pub scan_daily_hour_utc: Option<u8>,
+    #[serde(default)]
+    pub extract_roms_daily_hour_utc: Option<u8>,
 }
 
 impl Default for AgentConfig {
@@ -515,6 +522,9 @@ impl Default for AgentConfig {
             enable_hardware_tests: true,
             enable_resource_sampling: true,
             log_level: "info".into(),
+            cloud_backup_daily_hour_utc: None,
+            scan_daily_hour_utc: None,
+            extract_roms_daily_hour_utc: None,
         }
     }
 }

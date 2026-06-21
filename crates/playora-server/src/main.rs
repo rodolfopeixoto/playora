@@ -75,6 +75,19 @@ async fn main() -> Result<()> {
         .route("/api/v1/activities/recent", get(routes::activities_recent))
         .route("/api/v1/activities/:id", get(routes::activity_get))
         .route(
+            "/api/v1/devices/:id/delete-rom",
+            post(routes::delete_rom_request),
+        )
+        .route(
+            "/api/v1/devices/:id/delete-pending",
+            get(routes::delete_pending),
+        )
+        .route("/api/v1/devices/:id/delete-ack", post(routes::delete_ack))
+        .route(
+            "/dashboard/device/:id/delete-rom",
+            post(dashboard::delete_rom_form),
+        )
+        .route(
             "/api/v1/restore/progress",
             get(routes::restore_progress_latest),
         )

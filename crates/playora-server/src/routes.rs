@@ -452,6 +452,70 @@ pub async fn activity_get(
     Json(v.unwrap_or_else(|| serde_json::json!({"error":"not_found"})))
 }
 
+#[derive(Deserialize)]
+pub struct DeleteRomRequest {
+    pub rom_path: String,
+}
+
+pub async fn delete_rom_request(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+    Json(req): Json<DeleteRomRequest>,
+) -> StatusCode {
+    let conn = state.lock().await;
+    let _ = conn.execute(
+        "INSERT INTO delete_requests(device_id, rom_path, status, requested_at) VALUES (?1, ?2, 'pending', ?3)",
+        rusqlite::params![device_id, req.rom_path, Utc::now().to_rfc3339()],
+    );
+    StatusCode::ACCEPTED
+}
+
+pub async fn delete_pending(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+) -> Json<Vec<Value>> {
+    let conn = state.lock().await;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, rom_path FROM delete_requests WHERE device_id=?1 AND status='pending' ORDER BY id",
+        )
+        .unwrap();
+    let rows = stmt
+        .query_map([device_id], |r| {
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(0)?,
+                "rom_path": r.get::<_, String>(1)?,
+            }))
+        })
+        .unwrap();
+    Json(rows.flatten().collect())
+}
+
+#[derive(Deserialize)]
+pub struct DeleteAck {
+    pub rom_path: String,
+    pub status: String,
+    #[serde(default)]
+    pub error: String,
+}
+
+pub async fn delete_ack(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+    Json(req): Json<DeleteAck>,
+) -> StatusCode {
+    let conn = state.lock().await;
+    let _ = conn.execute(
+        "UPDATE delete_requests SET status=?3, processed_at=?4, error=?5 WHERE device_id=?1 AND rom_path=?2 AND status='pending'",
+        rusqlite::params![device_id, req.rom_path, req.status, Utc::now().to_rfc3339(), req.error],
+    );
+    // Also drop from games table on success
+    if req.status == "ok" {
+        let _ = conn.execute("DELETE FROM events WHERE event_type='rom_scanned' AND payload_json LIKE '%' || ?1 || '%'", rusqlite::params![req.rom_path]);
+    }
+    StatusCode::OK
+}
+
 pub async fn restore_progress_latest(AxState(state): AxState<State>) -> Json<Value> {
     let conn = state.lock().await;
     let v: Option<Value> = conn.query_row(

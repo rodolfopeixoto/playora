@@ -1,9 +1,29 @@
 use crate::State;
 use axum::{
     extract::{Path as AxPath, State as AxState},
-    response::Html,
+    response::{Html, Redirect},
+    Form,
 };
 use chrono::Utc;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct DeleteRomForm {
+    pub rom_path: String,
+}
+
+pub async fn delete_rom_form(
+    AxState(state): AxState<State>,
+    AxPath(device_id): AxPath<String>,
+    Form(form): Form<DeleteRomForm>,
+) -> Redirect {
+    let conn = state.lock().await;
+    let _ = conn.execute(
+        "INSERT INTO delete_requests(device_id, rom_path, status, requested_at) VALUES (?1, ?2, 'pending', ?3)",
+        rusqlite::params![device_id, form.rom_path, Utc::now().to_rfc3339()],
+    );
+    Redirect::to(&format!("/dashboard/device/{device_id}"))
+}
 
 const CSS: &str = r#"
 *{box-sizing:border-box}
@@ -38,6 +58,8 @@ footer{color:#444;font-size:11px;margin-top:48px;padding-top:16px;border-top:1px
 @media(max-width:700px){.row2{grid-template-columns:1fr}}
 .bar{height:6px;background:#1a1a22;border-radius:3px;overflow:hidden;margin-top:6px}
 .bar>div{height:100%;background:linear-gradient(90deg,#7c4dff,#42a5f5)}
+button.del{background:#3a0a0a;color:#ff7676;border:1px solid #4a1414;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:11px}
+button.del:hover{background:#4a1010;color:#fff}
 "#;
 
 fn header(active: &str) -> String {
@@ -621,6 +643,80 @@ pub async fn device_page(
         );
     }
 
+    // Per-device ROMs (latest scanned, with delete button).
+    let mut roms_html = String::new();
+    let mut stmt = conn
+        .prepare(
+            "SELECT json_extract(payload_json,'$.payload.data.metadata.rom_path'),
+                json_extract(payload_json,'$.payload.data.metadata.name'),
+                json_extract(payload_json,'$.payload.data.metadata.system'),
+                json_extract(payload_json,'$.payload.data.metadata.file_size'),
+                MAX(received_at)
+         FROM events WHERE device_id=?1 AND event_type='rom_scanned'
+         GROUP BY 1 ORDER BY 5 DESC LIMIT 30",
+        )
+        .unwrap();
+    let rows = stmt
+        .query_map([id.clone()], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .unwrap();
+    for (path, name, system, size, recv) in rows.flatten() {
+        let Some(path) = path else { continue };
+        let name = name.unwrap_or_else(|| "?".into());
+        let system = system.unwrap_or_else(|| "?".into());
+        let size_mb = size.unwrap_or(0) as f64 / 1024.0 / 1024.0;
+        let recv = recv.unwrap_or_default();
+        roms_html.push_str(&format!(
+            "<tr><td>{}</td><td><span class=\"pill\">{}</span></td><td class=\"muted\">{:.1} MB</td><td class=\"muted\">{}</td><td><form method=\"post\" action=\"/dashboard/device/{}/delete-rom\" onsubmit=\"return confirm('Queue delete of {}?')\"><input type=\"hidden\" name=\"rom_path\" value=\"{}\"><button class=\"del\" type=\"submit\">Queue delete</button></form></td></tr>",
+            esc(&name), esc(&system), size_mb, esc(&relative_time(&recv)),
+            esc(&id),
+            esc(&name),
+            esc(&path)
+        ));
+    }
+    if roms_html.is_empty() {
+        roms_html.push_str("<tr><td colspan=5 class=\"empty\">No ROMs scanned for this device. Run <code>Playora Scan ROMs</code>.</td></tr>");
+    }
+
+    // Pending delete requests for this device.
+    let mut pend_html = String::new();
+    let mut stmt = conn.prepare(
+        "SELECT rom_path, status, requested_at, COALESCE(processed_at,''), COALESCE(error,'') FROM delete_requests WHERE device_id=?1 ORDER BY id DESC LIMIT 20",
+    ).unwrap();
+    let rows = stmt
+        .query_map([id.clone()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })
+        .unwrap();
+    for (path, status, req_at, proc_at, err) in rows.flatten() {
+        let pill = match status.as_str() {
+            "ok" => "pill ok",
+            "fail" => "pill err",
+            _ => "pill warn",
+        };
+        pend_html.push_str(&format!(
+            "<tr><td><code>{}</code></td><td><span class=\"{}\">{}</span></td><td class=\"muted\">{}</td><td class=\"muted\">{}</td><td class=\"muted\">{}</td></tr>",
+            esc(&path), pill, esc(&status), esc(&relative_time(&req_at)),
+            esc(&relative_time(&proc_at)), esc(&err)
+        ));
+    }
+    if pend_html.is_empty() {
+        pend_html.push_str("<tr><td colspan=5 class=\"empty\">No delete requests.</td></tr>");
+    }
+
     // Per-device recent events (last 30, grouped by type).
     let mut ev_html = String::new();
     let mut stmt = conn.prepare("SELECT event_type, COUNT(*) as n, MAX(received_at) FROM events WHERE device_id=?1 GROUP BY event_type ORDER BY n DESC").unwrap();
@@ -694,6 +790,11 @@ pub async fn device_page(
 <table><thead><tr><th>Script</th><th>Status</th><th>Summary</th><th>When</th><th></th></tr></thead><tbody>{act_html}</tbody></table>
 <h2>Hardware</h2>
 <table>{hw_html}</table>
+<h2>ROMs (scanned)</h2>
+<p class="sub">Click "Queue delete" to schedule removal — the agent processes the queue every ~60s and the file is removed from the SD.</p>
+<table><thead><tr><th>Name</th><th>System</th><th>Size</th><th>Last scanned</th><th></th></tr></thead><tbody>{roms_html}</tbody></table>
+<h2>Delete queue</h2>
+<table><thead><tr><th>Path</th><th>Status</th><th>Requested</th><th>Processed</th><th>Error</th></tr></thead><tbody>{pend_html}</tbody></table>
 <h2>Events by type</h2>
 <table><thead><tr><th>Type</th><th>Count</th><th>Last received</th></tr></thead><tbody>{ev_html}</tbody></table>
 <h2>Top games</h2>

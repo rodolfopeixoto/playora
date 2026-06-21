@@ -162,4 +162,14 @@ CREATE TABLE IF NOT EXISTS downloads (
     device_id TEXT, catalog_item_id TEXT, status TEXT,
     payload_json TEXT, received_at TEXT
 );
+CREATE TABLE IF NOT EXISTS delete_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    rom_path TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    requested_at TEXT NOT NULL,
+    processed_at TEXT,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS delete_requests_device_idx ON delete_requests(device_id, status);
 "#;

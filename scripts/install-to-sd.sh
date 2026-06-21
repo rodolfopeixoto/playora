@@ -178,6 +178,7 @@ write_port "Cloud Setup"     "cloud setup"              600
 write_port "Cloud Backup"    "cloud backup"             1200
 write_port "Cloud Restore"   "cloud restore"            1200
 write_port "Cloud Status"    "cloud status"             10
+write_port "Cleanup"         "cleanup"                  120
 
 # Autosync triple: Status / Enable / Disable
 write_port "Autosync Status" "status"                   10
@@ -282,6 +283,20 @@ chmod 0755 "$PORTS_DIR/Playora Recover.sh"
 echo "[install] wrote $PORTS_DIR/Playora Recover.sh"
 write_splash "Recover" "kill agent + restart ES" "30"
 
+QUEUE="$PLAYORA_DIR/delete_queue.txt"
+if [ ! -f "$QUEUE" ]; then
+    cat > "$QUEUE" <<'EOF'
+# Playora — Delete Queue
+# One absolute path per line. Lines starting with # are ignored.
+# After editing, run "Playora Cleanup" from Ports (or wait for the autosync
+# service to process them every ~60s). Paths must be under /roms/.
+#
+# Examples:
+# /roms/snes/Old Game (Bad Dump).smc
+# /roms/psx/.duplicate
+EOF
+fi
+
 CFG="$PLAYORA_DIR/agent.toml"
 if [ ! -f "$CFG" ]; then
     SERVER_URL="${PLAYORA_SERVER_URL:-http://192.168.3.82:8080}"
@@ -305,6 +320,14 @@ enable_catalog = true
 enable_hardware_tests = true
 enable_resource_sampling = true
 log_level = "info"
+
+# Daily scheduled jobs (UTC hour 0-23). Comment out to disable.
+# Cloud Backup at 06:00 UTC (≈ 03:00 BRT) — drop overnight, autosync prevents suspend.
+cloud_backup_daily_hour_utc = 6
+# Scan ROMs at 05:00 UTC — finishes before backup.
+scan_daily_hour_utc = 5
+# Auto-extract anything in /roms/_inbox at 04:00 UTC.
+extract_roms_daily_hour_utc = 4
 EOF
     echo "[install] wrote config: $CFG"
 fi

@@ -3,6 +3,7 @@
 mod activity;
 mod catalog;
 mod cfg;
+mod cleanup;
 mod cloud;
 mod compress;
 mod coolrom;
@@ -192,6 +193,12 @@ enum Cmd {
     /// Cloud (Google Drive via rclone): setup OAuth, backup, restore
     #[command(subcommand)]
     Cloud(CloudCmd),
+    /// Process /roms/.playora/delete_queue.txt and (optionally) server delete-requests
+    Cleanup {
+        /// Also pull pending deletions from the dashboard server.
+        #[arg(long, default_value_t = true)]
+        from_server: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -606,6 +613,10 @@ fn main() -> Result<()> {
             CloudCmd::Restore => cloud::cmd_restore(),
             CloudCmd::Status => cloud::cmd_status(),
         },
+        Cmd::Cleanup { from_server } => {
+            let cfg = load_cfg(cli.config.as_deref())?;
+            cleanup::cmd_cleanup(cfg, from_server)
+        }
     }
 }
 

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{Timelike, Utc};
 use playora_common::*;
 use std::time::Duration;
 
@@ -128,13 +128,91 @@ pub fn cmd_run(cfg: AgentConfig) -> Result<()> {
         "playora-agent run — heartbeat every {}s, sync every {}s",
         60, cfg.sync_interval_seconds
     );
+    if let Some(h) = cfg.cloud_backup_daily_hour_utc {
+        println!("scheduled: cloud backup daily at {h:02}:00 UTC");
+    }
+    if let Some(h) = cfg.scan_daily_hour_utc {
+        println!("scheduled: scan ROMs daily at {h:02}:00 UTC");
+    }
+    if let Some(h) = cfg.extract_roms_daily_hour_utc {
+        println!("scheduled: extract ROMs daily at {h:02}:00 UTC");
+    }
+    let mut sched = Scheduler::default();
     loop {
         let _ = cmd_heartbeat(cfg.clone());
         if let Err(e) = cmd_sync_once(cfg.clone()) {
             tracing::warn!("sync: {e}");
         }
+        // Pull dashboard delete queue + apply.
+        let _ = crate::cleanup::cmd_cleanup(cfg.clone(), true);
+        // Scheduled jobs.
+        sched.tick(&cfg);
         std::thread::sleep(Duration::from_secs(cfg.sync_interval_seconds as u64));
     }
+}
+
+#[derive(Default)]
+struct Scheduler {
+    last_cloud_backup_day: Option<i32>,
+    last_scan_day: Option<i32>,
+    last_extract_day: Option<i32>,
+}
+
+impl Scheduler {
+    fn tick(&mut self, cfg: &AgentConfig) {
+        let now = Utc::now();
+        let h = now.hour() as u8;
+        let day_key = now.format("%Y%j").to_string().parse::<i32>().unwrap_or(0);
+
+        if let Some(target) = cfg.cloud_backup_daily_hour_utc {
+            if h == target && self.last_cloud_backup_day != Some(day_key) {
+                println!("[schedule] firing cloud backup");
+                run_inhibited("cloud-backup", &["cloud", "backup"], cfg);
+                self.last_cloud_backup_day = Some(day_key);
+            }
+        }
+        if let Some(target) = cfg.scan_daily_hour_utc {
+            if h == target && self.last_scan_day != Some(day_key) {
+                println!("[schedule] firing scan");
+                run_inhibited("scan", &["scan"], cfg);
+                self.last_scan_day = Some(day_key);
+            }
+        }
+        if let Some(target) = cfg.extract_roms_daily_hour_utc {
+            if h == target && self.last_extract_day != Some(day_key) {
+                println!("[schedule] firing extract-roms");
+                run_inhibited("extract-roms", &["extract-roms"], cfg);
+                self.last_extract_day = Some(day_key);
+            }
+        }
+    }
+}
+
+fn run_inhibited(label: &str, args: &[&str], cfg: &AgentConfig) {
+    use std::process::Command;
+    let exe = std::env::current_exe().unwrap_or_else(|_| "playora-agent".into());
+    // Try systemd-inhibit so console can't suspend mid-backup. Falls back to plain spawn.
+    let has_inhibit = Command::new("systemd-inhibit")
+        .arg("--version")
+        .status()
+        .is_ok();
+    let _ = crate::activity::progress(cfg, label, &format!("scheduled {label} started"));
+    let status = if has_inhibit {
+        Command::new("systemd-inhibit")
+            .args([
+                "--what=sleep:idle:handle-power-key",
+                "--why=playora-scheduled-job",
+                "--mode=block",
+            ])
+            .arg(&exe)
+            .args(args)
+            .status()
+    } else {
+        Command::new(&exe).args(args).status()
+    };
+    let rc = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+    let _ = crate::activity::end(cfg, label, rc, None);
+    println!("[schedule] {label} finished rc={rc}");
 }
 
 fn free_disk_mb(paths: &[String]) -> u64 {
