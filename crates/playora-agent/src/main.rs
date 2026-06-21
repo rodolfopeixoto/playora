@@ -11,6 +11,7 @@ mod launcher;
 mod myrient;
 mod portmaster;
 mod resources;
+mod restore;
 mod saves;
 mod scanner;
 mod selfupdate;
@@ -136,6 +137,11 @@ enum Cmd {
     /// PortMaster: list/search/install ports (Counter-Strike-like, Half-Life, etc.)
     #[command(subcommand)]
     Portmaster(PortmasterCmd),
+    /// Extract `playora_restore.tar` from /roms/ into the system (one-time bootstrap)
+    RestoreTar {
+        #[arg(long)]
+        keep_tar: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -484,6 +490,7 @@ fn main() -> Result<()> {
                 Ok(())
             }
         },
+        Cmd::RestoreTar { keep_tar } => restore::cmd(keep_tar),
     }
 }
 

@@ -42,6 +42,7 @@ write_port "Update"          "self-update"
 write_port "Saves Backup"    "saves upload"
 write_port "Doctor"          "doctor"
 write_port "Hardware"        "hardware snapshot"
+write_port "Restore Backup"  "restore-tar"
 
 # First-run agent config (only if missing)
 CFG="$PLAYORA_DIR/agent.toml"
