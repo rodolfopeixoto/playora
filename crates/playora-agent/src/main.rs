@@ -3,6 +3,8 @@
 mod activity;
 mod catalog;
 mod cfg;
+mod cloud;
+mod compress;
 mod coolrom;
 mod db;
 mod download;
@@ -180,6 +182,28 @@ enum Cmd {
         #[arg(long)]
         keep: bool,
     },
+    /// Compress PS1 .cue/.iso into .chd (smaller, faster, RetroArch-native)
+    CompressRoms {
+        #[arg(long, default_value = "/roms")]
+        roms_root: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Cloud (Google Drive via rclone): setup OAuth, backup, restore
+    #[command(subcommand)]
+    Cloud(CloudCmd),
+}
+
+#[derive(Subcommand)]
+enum CloudCmd {
+    /// Start Google Drive OAuth device-flow. URL + code land in log; visit on phone.
+    Setup,
+    /// Sync /roms/savestates and /roms/.playora to gdrive:R36S
+    Backup,
+    /// Pull gdrive:R36S back into /roms/savestates and /roms/.playora
+    Restore,
+    /// Print rclone status (configured remotes, last error)
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -573,6 +597,15 @@ fn main() -> Result<()> {
             roms_root,
             keep,
         } => extract::cmd_extract_roms(&inbox, &roms_root, keep),
+        Cmd::CompressRoms { roms_root, dry_run } => {
+            compress::cmd_compress_roms(&roms_root, dry_run)
+        }
+        Cmd::Cloud(c) => match c {
+            CloudCmd::Setup => cloud::cmd_setup(),
+            CloudCmd::Backup => cloud::cmd_backup(),
+            CloudCmd::Restore => cloud::cmd_restore(),
+            CloudCmd::Status => cloud::cmd_status(),
+        },
     }
 }
 

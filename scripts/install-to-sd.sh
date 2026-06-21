@@ -19,11 +19,37 @@ find "$PORTS_DIR" -maxdepth 1 -type f \( -name "Playora *.sh*" -o -name "Playora
 cp "$BIN" "$PLAYORA_DIR/playora-agent"
 chmod 0755 "$PLAYORA_DIR/playora-agent"
 
-# Shared helper: every port sources this for tty feedback + trap-guaranteed activity-end.
+# Bundle rclone aarch64 (~18MB) for cloud sync. Cached in dist/ to avoid re-download.
+RCLONE_CACHE="$ROOT/dist/rclone-aarch64"
+mkdir -p "$PLAYORA_DIR/bin"
+if [ ! -f "$RCLONE_CACHE" ]; then
+    echo "[install] downloading rclone aarch64 (one-time, ~18MB)..."
+    TMP_ZIP="$(mktemp -t rclone.XXXXXX.zip)"
+    if curl -sSfL --max-time 120 -o "$TMP_ZIP" \
+        "https://downloads.rclone.org/rclone-current-linux-arm64.zip"; then
+        TMP_DIR="$(mktemp -d -t rclone-extract)"
+        unzip -q "$TMP_ZIP" -d "$TMP_DIR"
+        find "$TMP_DIR" -name rclone -type f -exec cp {} "$RCLONE_CACHE" \;
+        chmod 0755 "$RCLONE_CACHE"
+        rm -rf "$TMP_DIR" "$TMP_ZIP"
+        echo "[install] cached: $RCLONE_CACHE"
+    else
+        echo "[install] WARN: rclone download failed — Cloud ports will print install hint"
+        rm -f "$TMP_ZIP"
+    fi
+fi
+if [ -f "$RCLONE_CACHE" ]; then
+    cp "$RCLONE_CACHE" "$PLAYORA_DIR/bin/rclone"
+    chmod 0755 "$PLAYORA_DIR/bin/rclone"
+    echo "[install] rclone -> $PLAYORA_DIR/bin/rclone"
+fi
+
+# Shared helper: never touches any tty/framebuffer (ES owns /dev/tty1).
+# All status goes to log file + dashboard via activity-end.
 cat > "$PLAYORA_DIR/port-runner.sh" <<'RUNNER'
 #!/bin/sh
 # Args: NAME CMD [TIMEOUT_SECONDS]
-# Writes status lines to /dev/tty1 + log file, posts Activity events to server.
+# Runs in a detached session — no controlling terminal, no fd inherits.
 NAME="$1"; shift
 CMD="$1"; shift
 TIMEOUT="${1:-30}"
@@ -33,36 +59,34 @@ LOG="/roms/.playora/logs/${SAFE}_$(date +%Y%m%d_%H%M%S).log"
 mkdir -p /roms/.playora/logs
 AGENT="/roms/.playora/playora-agent --config /roms/.playora/agent.toml"
 
-# tty1 = console framebuffer text on RK3326 dArkOSRE
-TTY=/dev/tty1
-[ -w "$TTY" ] || TTY=/dev/null
+# Drop ALL inherited fds — never share stdin/stdout/stderr with ES.
+exec </dev/null
+exec >>"$LOG"
+exec 2>&1
 
-say() {
-    printf '\033[36m[Playora]\033[0m %s\n' "$*" > "$TTY" 2>/dev/null || true
-    echo "[$(date +%H:%M:%S)] $*" >> "$LOG"
+log() {
+    echo "[$(date +%H:%M:%S)] $*"
 }
 
 # Trap guarantees activity-end fires even on timeout/kill.
 END_RC=1
 trap '
     RC=$END_RC
-    say "exit $RC"
+    log "exit $RC"
     $AGENT activity-end "$NAME" "$RC" --log "$LOG" >/dev/null 2>&1 || true
     $AGENT sync >/dev/null 2>&1 || true
 ' EXIT INT TERM
 
-say "===== $NAME ====="
-say "starting at $(date)"
-say "command: $CMD"
-say "timeout: ${TIMEOUT}s"
-say "log: $LOG"
-say ""
+log "===== $NAME ====="
+log "starting at $(date)"
+log "command: $CMD"
+log "timeout: ${TIMEOUT}s"
+log "log: $LOG"
 
 $AGENT activity-begin "$NAME" >/dev/null 2>&1 || true
-say "> sending start event..."
+log "> sent start event"
 
-say "> running '$CMD' (max ${TIMEOUT}s)..."
-# Lower priority so we never starve ES/audio. ionice if available.
+log "> running '$CMD' (max ${TIMEOUT}s)..."
 NICE="nice -n 15"
 if command -v ionice >/dev/null 2>&1; then
     IONICE="ionice -c 3"
@@ -70,23 +94,19 @@ else
     IONICE=""
 fi
 if [ "$TIMEOUT" = "none" ]; then
-    $NICE $IONICE $AGENT $CMD >> "$LOG" 2>&1
+    $NICE $IONICE $AGENT $CMD
     END_RC=$?
 else
-    timeout "$TIMEOUT" $NICE $IONICE $AGENT $CMD >> "$LOG" 2>&1
+    timeout "$TIMEOUT" $NICE $IONICE $AGENT $CMD
     END_RC=$?
 fi
 
 if [ "$END_RC" = "0" ]; then
-    say "> ok"
+    log "> ok"
 else
-    say "> FAILED (exit $END_RC)"
-    # Show last 3 log lines on screen for quick debug.
-    tail -n 3 "$LOG" 2>/dev/null | while IFS= read -r line; do
-        printf '\033[31m  %s\033[0m\n' "$line" > "$TTY" 2>/dev/null || true
-    done
+    log "> FAILED (exit $END_RC)"
 fi
-say "> syncing to dashboard..."
+log "> syncing to dashboard..."
 exit $END_RC
 RUNNER
 chmod 0755 "$PLAYORA_DIR/port-runner.sh"
@@ -123,10 +143,17 @@ write_splash() {
 write_port() {
     name="$1"; cmd="$2"; timeout_s="${3:-30}"
     file="$PORTS_DIR/Playora ${name}.sh"
+    # setsid fully detaches child from the controlling tty so ES keeps clean
+    # ownership of /dev/tty1. nohup ignores HUP. All fds redirected to /dev/null
+    # so child never inherits ES's stdout/stderr.
     cat > "$file" <<EOF
 #!/bin/sh
-# Fires port-runner in background — ES splash transitions cleanly, runner draws tty1 text.
-/roms/.playora/port-runner.sh "${name}" "${cmd}" "${timeout_s}" &
+SETSID=\$(command -v setsid 2>/dev/null)
+if [ -n "\$SETSID" ]; then
+    \$SETSID nohup /roms/.playora/port-runner.sh "${name}" "${cmd}" "${timeout_s}" </dev/null >/dev/null 2>&1 &
+else
+    nohup /roms/.playora/port-runner.sh "${name}" "${cmd}" "${timeout_s}" </dev/null >/dev/null 2>&1 &
+fi
 sleep 1
 exit 0
 EOF
@@ -146,14 +173,27 @@ write_port "Update"          "self-update"              180
 write_port "Kodi Setup"      "kodi setup"               60
 write_port "Scan ROMs"       "scan"                     300
 write_port "Extract ROMs"    "extract-roms"             600
+write_port "Compress ROMs"   "compress-roms"            1800
+write_port "Cloud Setup"     "cloud setup"              600
+write_port "Cloud Backup"    "cloud backup"             1200
+write_port "Cloud Restore"   "cloud restore"            1200
+write_port "Cloud Status"    "cloud status"             10
 
 # Autosync triple: Status / Enable / Disable
 write_port "Autosync Status" "status"                   10
 
 cat > "$PORTS_DIR/Playora Autosync Enable.sh" <<'EOF'
 #!/bin/sh
-/roms/.playora/port-runner.sh "Autosync Enable" "noop" 60 &
-(
+SETSID=$(command -v setsid 2>/dev/null)
+detach() {
+    if [ -n "$SETSID" ]; then
+        $SETSID nohup "$@" </dev/null >/dev/null 2>&1 &
+    else
+        nohup "$@" </dev/null >/dev/null 2>&1 &
+    fi
+}
+detach /roms/.playora/port-runner.sh "Autosync Enable" "noop" 60
+detach sh -c '
     sleep 2
     mkdir -p /roms/.playora/logs
     LOG="/roms/.playora/logs/autosync_enable_$(date +%Y%m%d_%H%M%S).log"
@@ -181,7 +221,7 @@ UNIT
             echo "running as background process (no systemd)"
         fi
     } >> "$LOG" 2>&1
-) &
+'
 sleep 1
 exit 0
 EOF
@@ -191,8 +231,16 @@ write_splash "Autosync Enable" "systemd enable + start" "60"
 
 cat > "$PORTS_DIR/Playora Autosync Disable.sh" <<'EOF'
 #!/bin/sh
-/roms/.playora/port-runner.sh "Autosync Disable" "noop" 60 &
-(
+SETSID=$(command -v setsid 2>/dev/null)
+detach() {
+    if [ -n "$SETSID" ]; then
+        $SETSID nohup "$@" </dev/null >/dev/null 2>&1 &
+    else
+        nohup "$@" </dev/null >/dev/null 2>&1 &
+    fi
+}
+detach /roms/.playora/port-runner.sh "Autosync Disable" "noop" 60
+detach sh -c '
     sleep 2
     LOG="/roms/.playora/logs/autosync_disable_$(date +%Y%m%d_%H%M%S).log"
     {
@@ -201,7 +249,7 @@ cat > "$PORTS_DIR/Playora Autosync Disable.sh" <<'EOF'
         pkill -f "playora-agent.*run" 2>/dev/null || true
         echo "service disabled"
     } >> "$LOG" 2>&1
-) &
+'
 sleep 1
 exit 0
 EOF
@@ -211,17 +259,22 @@ write_splash "Autosync Disable" "systemd disable + stop" "60"
 
 cat > "$PORTS_DIR/Playora Recover.sh" <<'EOF'
 #!/bin/sh
-LOG="/roms/.playora/logs/recover_$(date +%Y%m%d_%H%M%S).log"
-mkdir -p /roms/.playora/logs
-{
-    echo "==== $(date) ===="
-    sudo killall -9 playora-agent 2>/dev/null
-    sudo killall -9 gptokeyb 2>/dev/null
-    sudo systemctl restart emulationstation 2>/dev/null \
-        || sudo systemctl start emulationstation 2>/dev/null \
-        || (cd /; nohup emulationstation >/dev/null 2>&1 &)
-    echo "recover done"
-} > "$LOG" 2>&1 &
+SETSID=$(command -v setsid 2>/dev/null)
+[ -n "$SETSID" ] && PREFIX="$SETSID nohup" || PREFIX="nohup"
+$PREFIX sh -c '
+    LOG="/roms/.playora/logs/recover_$(date +%Y%m%d_%H%M%S).log"
+    mkdir -p /roms/.playora/logs
+    {
+        echo "==== $(date) ===="
+        sudo killall -9 playora-agent 2>/dev/null
+        sudo killall -9 gptokeyb 2>/dev/null
+        rm -f /tmp/playora-*.lock 2>/dev/null
+        sudo systemctl restart emulationstation 2>/dev/null \
+            || sudo systemctl start emulationstation 2>/dev/null \
+            || (cd /; nohup emulationstation >/dev/null 2>&1 &)
+        echo "recover done"
+    } > "$LOG" 2>&1
+' </dev/null >/dev/null 2>&1 &
 sleep 1
 exit 0
 EOF
