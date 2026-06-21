@@ -5,6 +5,7 @@ mod cfg;
 mod coolrom;
 mod db;
 mod download;
+mod extract;
 mod features;
 mod hw;
 mod kodi;
@@ -149,6 +150,16 @@ enum Cmd {
     /// Kodi setup helper (list addons, recommend, install via JSON-RPC)
     #[command(subcommand)]
     Kodi(KodiCmd),
+    /// Extract any archive (.zip .tar .tar.gz .tar.xz .tar.bz2 .7z .rar .gz .xz .bz2)
+    Extract {
+        file: String,
+        #[arg(long)]
+        dest: Option<String>,
+        #[arg(long)]
+        keep: bool,
+    },
+    /// Run a quick diagnostic + hardware snapshot + sync in one shot (background)
+    QuickSync,
 }
 
 #[derive(Subcommand)]
@@ -511,6 +522,15 @@ fn main() -> Result<()> {
             KodiCmd::Setup => kodi::cmd_setup(),
             KodiCmd::Install { addon_id } => kodi::cmd_install(&addon_id),
         },
+        Cmd::Extract { file, dest, keep } => extract::cmd(&file, dest.as_deref(), keep),
+        Cmd::QuickSync => {
+            let cfg = load_cfg(cli.config.as_deref())?;
+            let _ = tests::cmd_doctor(cfg.clone(), false);
+            let _ = hw::cmd_snapshot(cfg.clone(), true);
+            let _ = sync::cmd_heartbeat(cfg.clone());
+            let _ = sync::cmd_sync_once(cfg);
+            Ok(())
+        }
     }
 }
 

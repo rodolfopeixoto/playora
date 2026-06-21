@@ -116,7 +116,7 @@ pub async fn page(AxState(state): AxState<State>) -> Html<String> {
         let did = esc(&id);
         devices_html.push_str(&format!(
             "<tr><td><a href=\"/dashboard/device/{}\">{}</a></td><td><span class=\"pill\">{}</span></td><td><code>{}</code></td><td class=\"muted\">{}</td></tr>",
-            did, esc(&name), esc(&profile), did, esc(&seen)
+            did, esc(&name), esc(&profile), did, esc(&relative_time(&seen))
         ));
     }
     if devices_html.is_empty() {
@@ -187,7 +187,7 @@ pub async fn page(AxState(state): AxState<State>) -> Html<String> {
     for (typ, did, recv) in rows.flatten() {
         events_html.push_str(&format!(
             "<tr><td><span class=\"pill\">{}</span></td><td><a href=\"/dashboard/device/{}\"><code>{}</code></a></td><td class=\"muted\">{}</td></tr>",
-            esc(&typ), esc(&did), esc(&did), esc(&recv)
+            esc(&typ), esc(&did), esc(&did), esc(&relative_time(&recv))
         ));
     }
     if events_html.is_empty() {
@@ -260,7 +260,7 @@ pub async fn devices_list_page(AxState(state): AxState<State>) -> Html<String> {
         let did = esc(&id);
         rows_html.push_str(&format!(
             "<tr><td><a href=\"/dashboard/device/{}\">{}</a></td><td><span class=\"pill\">{}</span></td><td><code>{}</code></td><td>{}</td><td class=\"muted\">{}</td></tr>",
-            did, esc(&name), esc(&profile), did, esc(&ver), esc(&seen)
+            did, esc(&name), esc(&profile), did, esc(&ver), esc(&relative_time(&seen))
         ));
     }
     if rows_html.is_empty() {
@@ -292,7 +292,7 @@ pub async fn games_list_page(AxState(state): AxState<State>) -> Html<String> {
     for (sys, game, n, dur, last) in rows.flatten() {
         rows_html.push_str(&format!(
             "<tr><td>{}</td><td><span class=\"pill\">{}</span></td><td>{}</td><td>{}</td><td class=\"muted\">{}</td></tr>",
-            esc(&game), esc(&sys), n, fmt_dur(dur), esc(&last)
+            esc(&game), esc(&sys), n, fmt_dur(dur), esc(&relative_time(&last))
         ));
     }
     if rows_html.is_empty() {
@@ -485,5 +485,35 @@ fn fmt_dur(s: i64) -> String {
         format!("{m}m {sec}s")
     } else {
         format!("{sec}s")
+    }
+}
+
+fn relative_time(ts: &str) -> String {
+    if ts.is_empty() || ts == "—" {
+        return "never".into();
+    }
+    let parsed = chrono::DateTime::parse_from_rfc3339(ts).ok();
+    if let Some(t) = parsed {
+        let now = chrono::Utc::now();
+        let delta = now.signed_duration_since(t.with_timezone(&chrono::Utc));
+        let secs = delta.num_seconds().max(0);
+        if secs < 5 {
+            return "just now".into();
+        }
+        if secs < 60 {
+            return format!("{secs}s ago");
+        }
+        let mins = secs / 60;
+        if mins < 60 {
+            return format!("{mins}m ago");
+        }
+        let hours = mins / 60;
+        if hours < 24 {
+            return format!("{hours}h ago");
+        }
+        let days = hours / 24;
+        format!("{days}d ago")
+    } else {
+        ts.to_string()
     }
 }
