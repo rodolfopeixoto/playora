@@ -11,6 +11,7 @@ mod features;
 mod hw;
 mod kodi;
 mod launcher;
+mod lockfile;
 mod myrient;
 mod portmaster;
 mod resources;

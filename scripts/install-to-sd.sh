@@ -62,11 +62,18 @@ $AGENT activity-begin "$NAME" >/dev/null 2>&1 || true
 say "> sending start event..."
 
 say "> running '$CMD' (max ${TIMEOUT}s)..."
+# Lower priority so we never starve ES/audio. ionice if available.
+NICE="nice -n 15"
+if command -v ionice >/dev/null 2>&1; then
+    IONICE="ionice -c 3"
+else
+    IONICE=""
+fi
 if [ "$TIMEOUT" = "none" ]; then
-    $AGENT $CMD >> "$LOG" 2>&1
+    $NICE $IONICE $AGENT $CMD >> "$LOG" 2>&1
     END_RC=$?
 else
-    timeout "$TIMEOUT" $AGENT $CMD >> "$LOG" 2>&1
+    timeout "$TIMEOUT" $NICE $IONICE $AGENT $CMD >> "$LOG" 2>&1
     END_RC=$?
 fi
 
@@ -269,6 +276,29 @@ each ROM into /roms/<system>/. Originals are removed once extraction is OK.
 
 Reload the EmulationStation game list afterwards to see the new ROMs.
 EOF
+
+# Write gamelist.xml so EmulationStation uses our PNG splash + description per Port.
+GAMELIST="$PORTS_DIR/gamelist.xml"
+echo '<?xml version="1.0"?>' > "$GAMELIST"
+echo '<gameList>' >> "$GAMELIST"
+for sh in "$PORTS_DIR"/Playora\ *.sh; do
+    [ -f "$sh" ] || continue
+    base="$(basename "$sh")"
+    name_only="$(basename "$sh" .sh)"
+    short="${name_only#Playora }"
+    png="./${name_only}.png"
+    cat >> "$GAMELIST" <<XML
+  <game>
+    <path>./${base}</path>
+    <name>Playora · ${short}</name>
+    <desc>Background task. Runs the playora-agent ${short} command. Watch live status + log tail on the dashboard at ${PLAYORA_SERVER_URL:-http://192.168.3.82:8080}/dashboard — every click shows up there within seconds. EmulationStation returns immediately; never wait on a black screen.</desc>
+    <image>${png}</image>
+    <thumbnail>${png}</thumbnail>
+  </game>
+XML
+done
+echo '</gameList>' >> "$GAMELIST"
+echo "[install] wrote $GAMELIST"
 
 sync
 echo

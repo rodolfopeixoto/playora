@@ -18,6 +18,7 @@ const SKIP_DIRS: &[&str] = &[
     ".r36s-smart",
     ".playora",
     ".darkos",
+    "_inbox",
     "System Volume Information",
     ".Spotlight-V100",
     ".fseventsd",
@@ -28,9 +29,15 @@ const SAVE_LIKE: &[&str] = &[
 ];
 
 pub fn cmd_scan(cfg: AgentConfig) -> Result<()> {
-    let conn = crate::db::open(&crate::cfg::db_path())?;
+    let _lock = crate::lockfile::acquire("scan")?;
+    let mut conn = crate::db::open(&crate::cfg::db_path())?;
     let mut count = 0u64;
+    let mut skipped = 0u64;
     let mut per_system: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+
+    let tx = conn.transaction()?;
+    let mut last_progress = std::time::Instant::now();
+
     for root in &cfg.rom_paths {
         let root = Path::new(root);
         if !root.is_dir() {
@@ -73,8 +80,26 @@ pub fn cmd_scan(cfg: AgentConfig) -> Result<()> {
                     Err(_) => continue,
                 };
                 let size = md.len();
-                // Lazy hash: skip if already same path+size+mtime
-                let rom_hash = quick_hash(p)?;
+                let rom_path = p.display().to_string();
+
+                // Skip if already scanned with same path+size (avoid expensive hash).
+                let existing_size: Option<i64> = tx
+                    .query_row(
+                        "SELECT file_size FROM games WHERE rom_path=?1",
+                        rusqlite::params![rom_path],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                if existing_size == Some(size as i64) {
+                    skipped += 1;
+                    *per_system.entry(sys_name.clone()).or_default() += 1;
+                    continue;
+                }
+
+                let rom_hash = match quick_hash(p) {
+                    Ok(h) => h,
+                    Err(_) => continue,
+                };
                 let meta = GameMetadata {
                     system,
                     name: p
@@ -82,14 +107,14 @@ pub fn cmd_scan(cfg: AgentConfig) -> Result<()> {
                         .and_then(|s| s.to_str())
                         .unwrap_or("?")
                         .to_string(),
-                    rom_path: p.display().to_string(),
+                    rom_path: rom_path.clone(),
                     rom_hash: Some(rom_hash),
                     file_size: size,
                     extension: ext,
                     image_path: None,
                     metadata: serde_json::Value::Null,
                 };
-                conn.execute(
+                tx.execute(
                     "INSERT INTO games(system,name,rom_path,rom_hash,file_size,extension,metadata_json,last_scanned_at)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
                      ON CONFLICT(rom_path) DO UPDATE SET
@@ -112,23 +137,34 @@ pub fn cmd_scan(cfg: AgentConfig) -> Result<()> {
                         scanned_at: Utc::now(),
                     }),
                 };
-                crate::db::enqueue(&conn, &ev)?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO events_outbox(event_id, event_type, payload_json, status, retry_count, created_at)
+                     VALUES (?1, 'rom_scanned', ?2, 'pending', 0, ?3)",
+                    rusqlite::params![ev.event_id.0, serde_json::to_string(&ev)?, ev.created_at.to_rfc3339()],
+                )?;
                 count += 1;
                 *per_system.entry(sys_name.clone()).or_default() += 1;
-                if count % 100 == 0 {
-                    println!("  progress: {count} files scanned ({sys_name})");
-                    let _ = crate::activity::progress(
-                        &cfg,
-                        "Scan ROMs",
-                        &format!("scanned {count} files (current: {sys_name})"),
-                    );
+
+                // Time-based progress (every 2s) — DB-cheap.
+                if last_progress.elapsed().as_secs() >= 2 {
+                    last_progress = std::time::Instant::now();
+                    println!("  progress: {count} new, {skipped} unchanged ({sys_name})");
                 }
             }
         }
     }
+    tx.commit()?;
+
+    // Final progress emit outside transaction (small extra write).
+    let _ = crate::activity::progress(
+        &cfg,
+        "Scan ROMs",
+        &format!("done: {count} new + {skipped} unchanged"),
+    );
+
     println!();
     println!(
-        "SUMMARY: scanned {count} files across {} systems",
+        "SUMMARY: {count} new ROMs, {skipped} unchanged, {} systems",
         per_system.len()
     );
     for (sys, n) in &per_system {

@@ -14,6 +14,11 @@ pub fn open(path: &Path) -> Result<Connection> {
         "PRAGMA synchronous=NORMAL",
         "PRAGMA temp_store=MEMORY",
         "PRAGMA foreign_keys=ON",
+        // SD-card friendly: wait up to 15s for other process to release lock.
+        "PRAGMA busy_timeout=15000",
+        // Bigger cache reduces page churn on slow storage.
+        "PRAGMA cache_size=-8000",
+        "PRAGMA wal_autocheckpoint=2000",
     ] {
         c.execute_batch(p)?;
     }

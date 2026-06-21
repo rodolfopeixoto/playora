@@ -109,6 +109,7 @@ fn which(tool: &str) -> Option<PathBuf> {
 /// Walk inbox for archives, extract to temp, route every ROM into /roms/<system>/.
 /// Routing by extension. Ambiguous (zip/7z) → stays in temp + warning.
 pub fn cmd_extract_roms(inbox: &str, roms_root: &str, keep: bool) -> Result<()> {
+    let _lock = crate::lockfile::acquire("extract-roms")?;
     let cfg = crate::cfg::load(None).ok();
     cmd_extract_roms_inner(inbox, roms_root, keep, cfg.as_ref())
 }
@@ -296,7 +297,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let inbox = tmp.path().join("inbox");
         let roms = tmp.path().join("roms");
-        let r = cmd_extract_roms(inbox.to_str().unwrap(), roms.to_str().unwrap(), false);
+        let r =
+            cmd_extract_roms_inner(inbox.to_str().unwrap(), roms.to_str().unwrap(), false, None);
         assert!(r.is_ok());
     }
 
@@ -307,7 +309,9 @@ mod tests {
         let roms = tmp.path().join("roms");
         std::fs::create_dir_all(&inbox).unwrap();
         std::fs::write(inbox.join("game.gba"), b"x").unwrap();
-        let r = cmd_extract_roms(inbox.to_str().unwrap(), roms.to_str().unwrap(), false);
+        // bypass lockfile (test does not need single-instance protection)
+        let r =
+            cmd_extract_roms_inner(inbox.to_str().unwrap(), roms.to_str().unwrap(), false, None);
         assert!(r.is_ok(), "{:?}", r);
         assert!(roms.join("gba").join("game.gba").exists());
     }
