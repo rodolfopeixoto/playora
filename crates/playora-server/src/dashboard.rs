@@ -6,27 +6,56 @@ use axum::{
 use chrono::Utc;
 
 const CSS: &str = r#"
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0e0e10;color:#e6e6e6;margin:0;padding:24px}
-h1{margin:0 0 16px 0;font-size:22px}
-h2{font-size:14px;color:#aaa;margin:24px 0 8px;text-transform:uppercase;letter-spacing:.5px}
-a{color:#9ad;text-decoration:none}
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',Roboto,sans-serif;background:#0a0a0d;color:#e6e6ea;margin:0;padding:0;min-height:100vh}
+.wrap{max-width:1200px;margin:0 auto;padding:24px}
+header{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #1f1f26;padding-bottom:14px;margin-bottom:24px}
+header .brand{display:flex;align-items:center;gap:12px;font-size:18px;font-weight:600}
+header .brand .dot{width:10px;height:10px;border-radius:50%;background:linear-gradient(135deg,#7c4dff,#42a5f5)}
+header nav a{color:#9aa;text-decoration:none;margin-left:18px;font-size:13px;letter-spacing:.3px}
+header nav a.active,header nav a:hover{color:#fff}
+h1{font-size:24px;margin:0 0 4px 0;font-weight:600;letter-spacing:-.3px}
+.sub{color:#666;font-size:13px;margin:0 0 20px 0}
+h2{font-size:11px;color:#7a7a85;margin:28px 0 10px;text-transform:uppercase;letter-spacing:1.2px;font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:8px 0 24px}
+.card{background:linear-gradient(180deg,#15151b,#101015);border:1px solid #1f1f26;border-radius:10px;padding:18px;transition:transform .15s,border-color .15s}
+.card:hover{transform:translateY(-1px);border-color:#2a2a35}
+.card .l{color:#666;font-size:10px;text-transform:uppercase;letter-spacing:1px;font-weight:600}
+.card .v{font-size:26px;font-weight:600;margin-top:6px;color:#fff;letter-spacing:-.5px}
+table{width:100%;border-collapse:separate;border-spacing:0;background:#101015;border:1px solid #1f1f26;border-radius:10px;overflow:hidden;font-size:13px}
+th,td{padding:11px 14px;text-align:left;vertical-align:middle;border-bottom:1px solid #1a1a1f}
+tr:last-child td{border-bottom:none}
+th{color:#666;font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.5px;background:#0d0d12}
+tbody tr:hover td{background:#13131a}
+a{color:#7c9eff;text-decoration:none}
 a:hover{text-decoration:underline}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:24px}
-.card{background:#1b1b1f;border:1px solid #2a2a30;border-radius:8px;padding:16px}
-.card .v{font-size:24px;font-weight:600;margin-top:4px}
-.card .l{color:#8a8a90;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
-table{width:100%;border-collapse:collapse;margin:8px 0;background:#15151a;border-radius:6px;overflow:hidden}
-th,td{padding:8px 12px;border-bottom:1px solid #25252a;font-size:13px;text-align:left;vertical-align:top}
-th{color:#8a8a90;font-weight:500;background:#181820}
-tr:hover td{background:#1a1a22}
-code{color:#9ad;font-family:ui-monospace,monospace;font-size:12px}
-.muted{color:#666;font-size:11px}
-.pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#252530;color:#aab}
-footer{color:#666;font-size:11px;margin-top:32px}
-nav{margin-bottom:16px}
-nav a{margin-right:12px;color:#9ad}
-pre{background:#15151a;border:1px solid #2a2a30;padding:12px;border-radius:6px;overflow:auto;font-size:11px;max-height:400px}
+code{color:#9ad;font-family:'JetBrains Mono','SF Mono',ui-monospace,monospace;font-size:12px}
+.pill{display:inline-block;padding:3px 10px;border-radius:12px;font-size:10px;background:#1f1f2a;color:#9aa;text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+.empty{padding:32px;text-align:center;color:#555;font-size:13px}
+.muted{color:#555;font-size:12px}
+footer{color:#444;font-size:11px;margin-top:48px;padding-top:16px;border-top:1px solid #1a1a1f;text-align:center}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:700px){.row2{grid-template-columns:1fr}}
+.bar{height:6px;background:#1a1a22;border-radius:3px;overflow:hidden;margin-top:6px}
+.bar>div{height:100%;background:linear-gradient(90deg,#7c4dff,#42a5f5)}
 "#;
+
+fn header(active: &str) -> String {
+    let mark = |k: &str| if k == active { "active" } else { "" };
+    format!(
+        r#"<header>
+            <div class="brand"><span class="dot"></span>Playora Hub</div>
+            <nav>
+                <a class="{}" href="/dashboard">Overview</a>
+                <a class="{}" href="/dashboard/devices">Devices</a>
+                <a class="{}" href="/dashboard/games">Games</a>
+            </nav>
+        </header>"#,
+        mark("overview"),
+        mark("devices"),
+        mark("games")
+    )
+}
 
 pub async fn page(AxState(state): AxState<State>) -> Html<String> {
     let conn = state.lock().await;
@@ -42,12 +71,23 @@ pub async fn page(AxState(state): AxState<State>) -> Html<String> {
     let snapshots: i64 = conn
         .query_row("SELECT COUNT(*) FROM hardware_snapshots", [], |r| r.get(0))
         .unwrap_or(0);
-    let samples: i64 = conn
-        .query_row("SELECT COUNT(*) FROM resource_samples", [], |r| r.get(0))
-        .unwrap_or(0);
     let total_play: i64 = conn
         .query_row(
             "SELECT COALESCE(SUM(duration_seconds),0) FROM game_sessions",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let unique_games: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT game_name) FROM game_sessions WHERE game_name IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let unique_systems: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT system) FROM game_sessions WHERE system IS NOT NULL",
             [],
             |r| r.get(0),
         )
@@ -61,76 +101,7 @@ pub async fn page(AxState(state): AxState<State>) -> Html<String> {
         .unwrap_or_else(|_| "—".into());
 
     let mut devices_html = String::new();
-    let mut stmt = conn.prepare("SELECT device_id, device_name, device_profile, last_seen_at FROM devices ORDER BY last_seen_at DESC LIMIT 25").unwrap();
-    let rows = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1).unwrap_or_default(),
-                r.get::<_, String>(2).unwrap_or_default(),
-                r.get::<_, String>(3).unwrap_or_default(),
-            ))
-        })
-        .unwrap();
-    for row in rows.flatten() {
-        let did = esc(&row.0);
-        devices_html.push_str(&format!(
-            "<tr><td><a href=\"/dashboard/device/{}\"><code>{}</code></a></td><td>{}</td><td><span class=\"pill\">{}</span></td><td class=\"muted\">{}</td></tr>",
-            did, did, esc(&row.1), esc(&row.2), esc(&row.3)
-        ));
-    }
-    if devices_html.is_empty() {
-        devices_html.push_str("<tr><td colspan=4 class=\"muted\">No devices registered yet. Boot a console and run any Playora menu entry.</td></tr>");
-    }
-
-    let mut ranking_html = String::new();
-    let mut stmt = conn.prepare("SELECT game_name, system, SUM(duration_seconds) FROM game_sessions WHERE game_name IS NOT NULL GROUP BY game_name, system ORDER BY 3 DESC LIMIT 10").unwrap();
-    let rows = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-            ))
-        })
-        .unwrap();
-    for row in rows.flatten() {
-        ranking_html.push_str(&format!(
-            "<tr><td>{}</td><td><span class=\"pill\">{}</span></td><td>{}</td></tr>",
-            esc(&row.0),
-            esc(&row.1),
-            fmt_dur(row.2)
-        ));
-    }
-    if ranking_html.is_empty() {
-        ranking_html.push_str("<tr><td colspan=3 class=\"muted\">No play sessions yet.</td></tr>");
-    }
-
-    let mut sys_html = String::new();
-    let mut stmt = conn.prepare("SELECT system, COUNT(*), SUM(duration_seconds) FROM game_sessions WHERE system IS NOT NULL GROUP BY system ORDER BY 3 DESC LIMIT 15").unwrap();
-    let rows = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, i64>(2)?,
-            ))
-        })
-        .unwrap();
-    for row in rows.flatten() {
-        sys_html.push_str(&format!(
-            "<tr><td><span class=\"pill\">{}</span></td><td>{}</td><td>{}</td></tr>",
-            esc(&row.0),
-            row.1,
-            fmt_dur(row.2)
-        ));
-    }
-    if sys_html.is_empty() {
-        sys_html.push_str("<tr><td colspan=3 class=\"muted\">No system data yet.</td></tr>");
-    }
-
-    let mut events_html = String::new();
-    let mut stmt = conn.prepare("SELECT event_id, device_id, event_type, received_at FROM events ORDER BY id DESC LIMIT 20").unwrap();
+    let mut stmt = conn.prepare("SELECT device_id, COALESCE(device_name,'?'), COALESCE(device_profile,'?'), COALESCE(last_seen_at,'') FROM devices ORDER BY last_seen_at DESC LIMIT 25").unwrap();
     let rows = stmt
         .query_map([], |r| {
             Ok((
@@ -141,51 +112,196 @@ pub async fn page(AxState(state): AxState<State>) -> Html<String> {
             ))
         })
         .unwrap();
-    for row in rows.flatten() {
+    for (id, name, profile, seen) in rows.flatten() {
+        let did = esc(&id);
+        devices_html.push_str(&format!(
+            "<tr><td><a href=\"/dashboard/device/{}\">{}</a></td><td><span class=\"pill\">{}</span></td><td><code>{}</code></td><td class=\"muted\">{}</td></tr>",
+            did, esc(&name), esc(&profile), did, esc(&seen)
+        ));
+    }
+    if devices_html.is_empty() {
+        devices_html.push_str("<tr><td colspan=4 class=\"empty\">No devices yet. Open <code>Ports → Playora Doctor</code> on the console.</td></tr>");
+    }
+
+    let mut top_games = String::new();
+    let mut stmt = conn.prepare("SELECT game_name, system, SUM(duration_seconds) FROM game_sessions WHERE game_name IS NOT NULL GROUP BY game_name, system ORDER BY 3 DESC LIMIT 10").unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .unwrap();
+    let collected: Vec<_> = rows.flatten().collect();
+    let max_dur = collected.iter().map(|r| r.2).max().unwrap_or(1).max(1);
+    for (game, system, dur) in &collected {
+        let pct = (*dur as f64 / max_dur as f64 * 100.0) as u32;
+        top_games.push_str(&format!(
+            "<tr><td>{}</td><td><span class=\"pill\">{}</span></td><td>{}<div class=\"bar\"><div style=\"width:{}%\"></div></div></td></tr>",
+            esc(game), esc(system), fmt_dur(*dur), pct
+        ));
+    }
+    if top_games.is_empty() {
+        top_games.push_str("<tr><td colspan=3 class=\"empty\">No play sessions yet.</td></tr>");
+    }
+
+    let mut top_systems = String::new();
+    let mut stmt = conn.prepare("SELECT system, COUNT(*), SUM(duration_seconds) FROM game_sessions WHERE system IS NOT NULL GROUP BY system ORDER BY 3 DESC LIMIT 10").unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .unwrap();
+    let sys_collected: Vec<_> = rows.flatten().collect();
+    let max_sys = sys_collected.iter().map(|r| r.2).max().unwrap_or(1).max(1);
+    for (system, count, dur) in &sys_collected {
+        let pct = (*dur as f64 / max_sys as f64 * 100.0) as u32;
+        top_systems.push_str(&format!(
+            "<tr><td><span class=\"pill\">{}</span></td><td>{}</td><td>{}<div class=\"bar\"><div style=\"width:{}%\"></div></div></td></tr>",
+            esc(system), count, fmt_dur(*dur), pct
+        ));
+    }
+    if top_systems.is_empty() {
+        top_systems.push_str("<tr><td colspan=3 class=\"empty\">No system data yet.</td></tr>");
+    }
+
+    let mut events_html = String::new();
+    let mut stmt = conn
+        .prepare("SELECT event_type, device_id, received_at FROM events ORDER BY id DESC LIMIT 12")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap();
+    for (typ, did, recv) in rows.flatten() {
         events_html.push_str(&format!(
-            "<tr><td><code>{}</code></td><td><a href=\"/dashboard/device/{}\"><code>{}</code></a></td><td><span class=\"pill\">{}</span></td><td class=\"muted\">{}</td></tr>",
-            esc(&row.0), esc(&row.1), esc(&row.1), esc(&row.2), esc(&row.3)
+            "<tr><td><span class=\"pill\">{}</span></td><td><a href=\"/dashboard/device/{}\"><code>{}</code></a></td><td class=\"muted\">{}</td></tr>",
+            esc(&typ), esc(&did), esc(&did), esc(&recv)
         ));
     }
     if events_html.is_empty() {
-        events_html.push_str("<tr><td colspan=4 class=\"muted\">No events yet.</td></tr>");
+        events_html.push_str("<tr><td colspan=3 class=\"empty\">No events yet.</td></tr>");
     }
 
     let html = format!(
         r#"<!doctype html>
-<html><head><meta charset="utf-8"><title>Playora Hub</title>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Playora Hub</title>
 <meta http-equiv="refresh" content="15">
 <style>{css}</style></head>
-<body>
-  <nav><a href="/dashboard">Overview</a></nav>
-  <h1>Playora Hub</h1>
-  <div class="grid">
+<body><div class="wrap">
+{hdr}
+<h1>Overview</h1>
+<p class="sub">Auto-refresh every 15s · last heartbeat: <code>{last_hb}</code></p>
+
+<div class="grid">
     <div class="card"><div class="l">Devices</div><div class="v">{devices}</div></div>
-    <div class="card"><div class="l">Events</div><div class="v">{events}</div></div>
     <div class="card"><div class="l">Sessions</div><div class="v">{sessions}</div></div>
     <div class="card"><div class="l">Total playtime</div><div class="v">{play}</div></div>
+    <div class="card"><div class="l">Unique games</div><div class="v">{unique_games}</div></div>
+    <div class="card"><div class="l">Systems played</div><div class="v">{unique_systems}</div></div>
+    <div class="card"><div class="l">Events received</div><div class="v">{events}</div></div>
     <div class="card"><div class="l">HW snapshots</div><div class="v">{snapshots}</div></div>
-    <div class="card"><div class="l">Resource samples</div><div class="v">{samples}</div></div>
-    <div class="card"><div class="l">Last heartbeat</div><div class="v" style="font-size:14px">{last_hb}</div></div>
-  </div>
+</div>
 
-  <h2>Devices (click for detail)</h2>
-  <table><tr><th>ID</th><th>Name</th><th>Profile</th><th>Last seen</th></tr>{devices_html}</table>
+<div class="row2">
+    <div>
+        <h2>Top games by playtime</h2>
+        <table><thead><tr><th>Game</th><th>System</th><th>Total time</th></tr></thead><tbody>{top_games}</tbody></table>
+    </div>
+    <div>
+        <h2>Top systems</h2>
+        <table><thead><tr><th>System</th><th>Sessions</th><th>Total time</th></tr></thead><tbody>{top_systems}</tbody></table>
+    </div>
+</div>
 
-  <h2>Top games by playtime</h2>
-  <table><tr><th>Game</th><th>System</th><th>Total time</th></tr>{ranking_html}</table>
+<h2>Devices</h2>
+<table><thead><tr><th>Name</th><th>Profile</th><th>ID</th><th>Last seen</th></tr></thead><tbody>{devices_html}</tbody></table>
 
-  <h2>Top systems</h2>
-  <table><tr><th>System</th><th>Sessions</th><th>Total time</th></tr>{sys_html}</table>
+<h2>Latest events</h2>
+<table><thead><tr><th>Type</th><th>Device</th><th>Received</th></tr></thead><tbody>{events_html}</tbody></table>
 
-  <h2>Latest events</h2>
-  <table><tr><th>Event ID</th><th>Device</th><th>Type</th><th>Received</th></tr>{events_html}</table>
-
-  <footer>Playora — {now}</footer>
-</body></html>"#,
+<footer>Playora · {now}</footer>
+</div></body></html>"#,
         css = CSS,
+        hdr = header("overview"),
         play = fmt_dur(total_play),
-        now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+        now = Utc::now().format("%Y-%m-%d %H:%M UTC"),
+    );
+    Html(html)
+}
+
+pub async fn devices_list_page(AxState(state): AxState<State>) -> Html<String> {
+    let conn = state.lock().await;
+    let mut rows_html = String::new();
+    let mut stmt = conn.prepare("SELECT device_id, COALESCE(device_name,'?'), COALESCE(device_profile,'?'), COALESCE(agent_version,''), COALESCE(last_seen_at,'') FROM devices ORDER BY last_seen_at DESC").unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })
+        .unwrap();
+    for (id, name, profile, ver, seen) in rows.flatten() {
+        let did = esc(&id);
+        rows_html.push_str(&format!(
+            "<tr><td><a href=\"/dashboard/device/{}\">{}</a></td><td><span class=\"pill\">{}</span></td><td><code>{}</code></td><td>{}</td><td class=\"muted\">{}</td></tr>",
+            did, esc(&name), esc(&profile), did, esc(&ver), esc(&seen)
+        ));
+    }
+    if rows_html.is_empty() {
+        rows_html.push_str("<tr><td colspan=5 class=\"empty\">No devices.</td></tr>");
+    }
+    let html = format!(
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>Devices · Playora</title><style>{css}</style></head><body><div class="wrap">{hdr}<h1>Devices</h1><table><thead><tr><th>Name</th><th>Profile</th><th>ID</th><th>Agent</th><th>Last seen</th></tr></thead><tbody>{rows_html}</tbody></table></div></body></html>"#,
+        css = CSS,
+        hdr = header("devices")
+    );
+    Html(html)
+}
+
+pub async fn games_list_page(AxState(state): AxState<State>) -> Html<String> {
+    let conn = state.lock().await;
+    let mut rows_html = String::new();
+    let mut stmt = conn.prepare("SELECT system, game_name, COUNT(*), SUM(duration_seconds), MAX(started_at) FROM game_sessions WHERE game_name IS NOT NULL GROUP BY system, game_name ORDER BY 4 DESC").unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4).unwrap_or_default(),
+            ))
+        })
+        .unwrap();
+    for (sys, game, n, dur, last) in rows.flatten() {
+        rows_html.push_str(&format!(
+            "<tr><td>{}</td><td><span class=\"pill\">{}</span></td><td>{}</td><td>{}</td><td class=\"muted\">{}</td></tr>",
+            esc(&game), esc(&sys), n, fmt_dur(dur), esc(&last)
+        ));
+    }
+    if rows_html.is_empty() {
+        rows_html.push_str("<tr><td colspan=5 class=\"empty\">No games tracked yet.</td></tr>");
+    }
+    let html = format!(
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>Games · Playora</title><style>{css}</style></head><body><div class="wrap">{hdr}<h1>Games</h1><table><thead><tr><th>Game</th><th>System</th><th>Sessions</th><th>Total time</th><th>Last played</th></tr></thead><tbody>{rows_html}</tbody></table></div></body></html>"#,
+        css = CSS,
+        hdr = header("games")
     );
     Html(html)
 }
@@ -195,13 +311,10 @@ pub async fn device_page(
     AxPath(id): AxPath<String>,
 ) -> Html<String> {
     let conn = state.lock().await;
-
     let dev: Option<(String, String, String, String, String)> = conn.query_row(
         "SELECT device_id, COALESCE(device_name,''), COALESCE(device_profile,''), COALESCE(os_family,''), COALESCE(last_seen_at,'') FROM devices WHERE device_id=?1",
-        [id.clone()],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        [id.clone()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     ).ok();
-
     let total_play: i64 = conn
         .query_row(
             "SELECT COALESCE(SUM(duration_seconds),0) FROM game_sessions WHERE device_id=?1",
@@ -229,70 +342,72 @@ pub async fn device_page(
             ))
         })
         .unwrap();
-    for row in rows.flatten() {
+    for (g, s, d, c) in rows.flatten() {
         games_html.push_str(&format!(
             "<tr><td>{}</td><td><span class=\"pill\">{}</span></td><td>{}</td><td>{}</td></tr>",
-            esc(&row.0),
-            esc(&row.1),
-            row.3,
-            fmt_dur(row.2)
+            esc(&g),
+            esc(&s),
+            c,
+            fmt_dur(d)
         ));
     }
     if games_html.is_empty() {
-        games_html.push_str("<tr><td colspan=4 class=\"muted\">No games tracked yet.</td></tr>");
+        games_html.push_str(
+            "<tr><td colspan=4 class=\"empty\">No games tracked yet for this device.</td></tr>",
+        );
     }
 
     let mut hw_html = String::new();
-    let hw_row: Option<String> = conn.query_row(
-        "SELECT payload_json FROM hardware_snapshots WHERE device_id=?1 OR device_id='' ORDER BY id DESC LIMIT 1",
-        [id.clone()], |r| r.get(0)
-    ).ok();
+    let hw_row: Option<String> = conn.query_row("SELECT payload_json FROM hardware_snapshots WHERE device_id=?1 ORDER BY id DESC LIMIT 1", [id.clone()], |r| r.get(0)).ok();
     if let Some(j) = hw_row {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&j) {
-            let cpu = v.get("cpu_model").and_then(|x| x.as_str()).unwrap_or("?");
-            let arch = v.get("cpu_arch").and_then(|x| x.as_str()).unwrap_or("?");
-            let cores = v.get("cpu_cores").and_then(|x| x.as_u64()).unwrap_or(0);
-            let mem = v.get("mem_total_mb").and_then(|x| x.as_u64()).unwrap_or(0);
-            let kernel = v.get("kernel").and_then(|x| x.as_str()).unwrap_or("?");
-            let hw_str = v
-                .get("hardware_string")
-                .and_then(|x| x.as_str())
-                .unwrap_or("?");
-            let panel = v
-                .get("panel_compatible")
-                .and_then(|x| x.as_str())
-                .unwrap_or("?");
-            let res = v.get("panel_resolution").and_then(|x| x.as_array());
-            let res_s = res
+            let g = |k: &str| {
+                v.get(k)
+                    .map(|x| match x {
+                        serde_json::Value::String(s) => s.clone(),
+                        _ => x.to_string(),
+                    })
+                    .unwrap_or_else(|| "?".into())
+            };
+            let panel_res = v
+                .get("panel_resolution")
+                .and_then(|x| x.as_array())
                 .map(|a| {
                     format!(
-                        "{}x{}",
+                        "{}×{}",
                         a.first().and_then(|v| v.as_u64()).unwrap_or(0),
                         a.get(1).and_then(|v| v.as_u64()).unwrap_or(0)
                     )
                 })
                 .unwrap_or_else(|| "?".into());
             hw_html.push_str(&format!(
-                r#"
-                <tr><th>CPU</th><td>{} ({}, {} cores)</td></tr>
-                <tr><th>Memory</th><td>{} MB</td></tr>
+                r#"<tr><th>CPU</th><td>{} ({}, {} cores)</td></tr>
+                <tr><th>Memory</th><td>{} MB total</td></tr>
                 <tr><th>Kernel</th><td>{}</td></tr>
-                <tr><th>Hardware string</th><td>{}</td></tr>
-                <tr><th>Panel</th><td>{} / {}</td></tr>
-            "#,
-                esc(cpu),
-                esc(arch),
-                cores,
-                mem,
-                esc(kernel),
-                esc(hw_str),
-                esc(panel),
-                res_s
+                <tr><th>Hardware string</th><td><code>{}</code></td></tr>
+                <tr><th>Panel</th><td>{} @ {}</td></tr>
+                <tr><th>RetroArch</th><td>{}</td></tr>"#,
+                esc(&g("cpu_model")),
+                esc(&g("cpu_arch")),
+                g("cpu_cores"),
+                g("mem_total_mb"),
+                esc(&g("kernel")),
+                esc(&g("hardware_string")),
+                esc(&g("panel_compatible")),
+                panel_res,
+                if v.get("retroarch_detected")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false)
+                {
+                    "detected"
+                } else {
+                    "not detected"
+                }
             ));
         }
     }
     if hw_html.is_empty() {
-        hw_html.push_str("<tr><td colspan=2 class=\"muted\">No hardware snapshot yet. Open Ports → Playora Hardware on the device.</td></tr>");
+        hw_html.push_str("<tr><td colspan=2 class=\"empty\">No hardware snapshot. Open <code>Ports → Playora Hardware</code>.</td></tr>");
     }
 
     let mut sess_html = String::new();
@@ -307,45 +422,47 @@ pub async fn device_page(
             ))
         })
         .unwrap();
-    for row in rows.flatten() {
-        sess_html.push_str(&format!("<tr><td><span class=\"pill\">{}</span></td><td>{}</td><td>{}</td><td class=\"muted\">{}</td></tr>", esc(&row.0), esc(&row.1), fmt_dur(row.2), esc(&row.3)));
+    for (s, g, d, t) in rows.flatten() {
+        sess_html.push_str(&format!("<tr><td><span class=\"pill\">{}</span></td><td>{}</td><td>{}</td><td class=\"muted\">{}</td></tr>", esc(&s), esc(&g), fmt_dur(d), esc(&t)));
     }
     if sess_html.is_empty() {
-        sess_html.push_str("<tr><td colspan=4 class=\"muted\">No sessions tracked yet.</td></tr>");
+        sess_html.push_str("<tr><td colspan=4 class=\"empty\">No sessions yet.</td></tr>");
     }
 
-    let header = match dev.as_ref() {
-        Some((id, name, profile, os, _)) => format!("<h1>{} <span class=\"pill\">{}</span> <span class=\"muted\">{}</span></h1><p><code>{}</code></p>", esc(name), esc(profile), esc(os), esc(id)),
-        None => format!("<h1>Unknown device <code>{}</code></h1><p class=\"muted\">No record found. Run any Playora menu action to register.</p>", esc(&id)),
+    let title = match dev.as_ref() {
+        Some((_, name, profile, os, seen)) => format!(
+            "<h1>{}</h1><p class=\"sub\"><span class=\"pill\">{}</span> · {} · last seen <code>{}</code></p><p><code>{}</code></p>",
+            esc(name), esc(profile), esc(os), esc(seen), esc(&id)
+        ),
+        None => format!(
+            "<h1>Unknown device</h1><p class=\"sub\">No record. Run any Playora menu entry on the device.</p><p><code>{}</code></p>",
+            esc(&id)
+        ),
     };
 
     let html = format!(
-        r#"<!doctype html>
-<html><head><meta charset="utf-8"><title>Playora — Device</title>
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>Device · Playora</title>
 <meta http-equiv="refresh" content="20">
 <style>{css}</style></head>
-<body>
-  <nav><a href="/dashboard">← Overview</a></nav>
-  {header}
-  <div class="grid">
+<body><div class="wrap">
+{hdr}
+{title}
+<div class="grid">
     <div class="card"><div class="l">Sessions</div><div class="v">{sess_count}</div></div>
     <div class="card"><div class="l">Total playtime</div><div class="v">{play}</div></div>
-  </div>
-
-  <h2>Hardware</h2>
-  <table>{hw_html}</table>
-
-  <h2>Top games</h2>
-  <table><tr><th>Game</th><th>System</th><th>Sessions</th><th>Total time</th></tr>{games_html}</table>
-
-  <h2>Recent sessions</h2>
-  <table><tr><th>System</th><th>Game</th><th>Duration</th><th>Started at</th></tr>{sess_html}</table>
-
-  <footer>Playora — {now}</footer>
-</body></html>"#,
+</div>
+<h2>Hardware</h2>
+<table>{hw_html}</table>
+<h2>Top games</h2>
+<table><thead><tr><th>Game</th><th>System</th><th>Sessions</th><th>Total time</th></tr></thead><tbody>{games_html}</tbody></table>
+<h2>Recent sessions</h2>
+<table><thead><tr><th>System</th><th>Game</th><th>Duration</th><th>Started</th></tr></thead><tbody>{sess_html}</tbody></table>
+<footer>Playora · {now}</footer>
+</div></body></html>"#,
         css = CSS,
+        hdr = header("devices"),
         play = fmt_dur(total_play),
-        now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+        now = Utc::now().format("%Y-%m-%d %H:%M UTC"),
     );
     Html(html)
 }
@@ -354,6 +471,7 @@ fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn fmt_dur(s: i64) -> String {

@@ -73,6 +73,8 @@ async fn main() -> Result<()> {
             get(routes::analytics_overview),
         )
         .route("/dashboard", get(dashboard::page))
+        .route("/dashboard/devices", get(dashboard::devices_list_page))
+        .route("/dashboard/games", get(dashboard::games_list_page))
         .route("/dashboard/device/:id", get(dashboard::device_page))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
