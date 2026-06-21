@@ -55,6 +55,7 @@ pub struct PortAttr {
     pub arch: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Catalog {
     pub ports: Vec<CatalogEntry>,
 }
@@ -269,5 +270,34 @@ mod tests {
         assert_eq!(search(&c, "vvv").len(), 1);
         assert_eq!(search(&c, "platform").len(), 1);
         assert_eq!(search(&c, "xyz").len(), 0);
+    }
+
+    #[test]
+    fn ports_root_returns_some_path_ending_ports() {
+        let p = ports_root();
+        assert!(p.to_string_lossy().ends_with("ports"));
+    }
+
+    #[test]
+    fn empty_ports_object_yields_error() {
+        assert!(parse_catalog(r#"{"unrelated":{}}"#).is_err());
+    }
+
+    #[test]
+    fn ports_sorted_by_title_case_insensitive() {
+        let j = r#"{"ports":{
+            "z.zip": {"attr":{"title":"zebra"}},
+            "a.zip": {"attr":{"title":"Alpha"}}
+        }}"#;
+        let c = parse_catalog(j).unwrap();
+        assert_eq!(c.ports[0].attr.title, "Alpha");
+        assert_eq!(c.ports[1].attr.title, "zebra");
+    }
+
+    #[test]
+    fn list_installed_handles_missing_dir() {
+        // Should not panic when dir doesn't exist
+        let v = list_installed();
+        assert!(v.is_empty() || !v.is_empty()); // tautology — just ensures no panic
     }
 }

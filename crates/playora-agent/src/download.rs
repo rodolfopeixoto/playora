@@ -141,7 +141,7 @@ fn free_bytes(p: &Path) -> Option<u64> {
     if unsafe { statvfs(cp.as_ptr(), &mut s) } != 0 {
         return None;
     }
-    Some(s.f_bavail * s.f_frsize)
+    Some(s.f_bavail.saturating_mul(s.f_frsize))
 }
 
 #[cfg(test)]
@@ -156,5 +156,19 @@ mod tests {
             "Pokemon.zip"
         );
         assert_eq!(infer_filename("https://x/"), "download.bin");
+    }
+
+    #[test]
+    fn infer_handles_fragments_and_double_slashes() {
+        assert_eq!(
+            infer_filename("https://x/y/Pokemon.zip#frag"),
+            "Pokemon.zip"
+        );
+        assert_eq!(infer_filename("https://x//Pokemon.zip"), "Pokemon.zip");
+    }
+
+    #[test]
+    fn free_bytes_does_not_panic_on_tmp() {
+        let _ = free_bytes(std::path::Path::new("/tmp"));
     }
 }

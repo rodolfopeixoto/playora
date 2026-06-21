@@ -569,4 +569,87 @@ mod core_tests {
         assert!(c.enable_catalog);
         assert!(c.max_batch_size > 0);
     }
+
+    #[test]
+    fn event_id_default_is_unique() {
+        let a = EventId::default();
+        let b = EventId::default();
+        assert_ne!(a, b);
+        assert!(a.as_str().starts_with("evt_"));
+    }
+
+    #[test]
+    fn session_test_sample_ids_have_prefix() {
+        assert!(SessionId::new().as_str().starts_with("ses_"));
+        assert!(TestId::new().as_str().starts_with("tst_"));
+        assert!(SampleId::new().as_str().starts_with("smp_"));
+    }
+
+    #[test]
+    fn device_profile_detection_branches() {
+        assert!(matches!(
+            DeviceProfile::detect_from("BOYHOM-R36"),
+            DeviceProfile::R36sBoyhomOriginal
+        ));
+        assert!(matches!(
+            DeviceProfile::detect_from("Generic-Linux-Box"),
+            DeviceProfile::UnknownLinuxHandheld
+        ));
+        assert!(matches!(
+            DeviceProfile::detect_from("r36s anbernic"),
+            DeviceProfile::R36sDarkosreClone
+        ));
+    }
+
+    #[test]
+    fn game_system_recognized_folders() {
+        assert_eq!(GameSystem::from_folder("nes"), GameSystem::Nes);
+        assert_eq!(GameSystem::from_folder("NES"), GameSystem::Nes);
+        assert_eq!(GameSystem::from_folder("famicom"), GameSystem::Nes);
+        assert_eq!(GameSystem::from_folder("invalid_xyz"), GameSystem::Other);
+    }
+
+    #[test]
+    fn sync_batch_serializes() {
+        let batch = SyncBatch {
+            device_id: DeviceId::new(),
+            agent_version: "0.0.0".into(),
+            events: vec![],
+        };
+        let s = serde_json::to_string(&batch).unwrap();
+        assert!(s.contains("device_id"));
+    }
+
+    #[test]
+    fn sync_ack_round_trip() {
+        let id = EventId::new();
+        let ack = SyncAck {
+            accepted: vec![id.clone()],
+            duplicates: vec![],
+            rejected: vec![],
+        };
+        let s = serde_json::to_string(&ack).unwrap();
+        let back: SyncAck = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.accepted.len(), 1);
+    }
+
+    #[test]
+    fn feature_status_round_trip() {
+        for v in [
+            FeatureStatus::Enabled,
+            FeatureStatus::Disabled,
+            FeatureStatus::Locked,
+            FeatureStatus::Planned,
+        ] {
+            let s = serde_json::to_string(&v).unwrap();
+            let back: FeatureStatus = serde_json::from_str(&s).unwrap();
+            assert_eq!(back, v);
+        }
+    }
+
+    #[test]
+    fn sha256_hex_zero_padded() {
+        let h = sha256_hex(&[0x01, 0x0f]);
+        assert_eq!(h, "010f");
+    }
 }
