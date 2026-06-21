@@ -172,4 +172,10 @@ CREATE TABLE IF NOT EXISTS delete_requests (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS delete_requests_device_idx ON delete_requests(device_id, status);
+CREATE TABLE IF NOT EXISTS cloud_auth_tokens (
+    device_id TEXT PRIMARY KEY,
+    token TEXT NOT NULL,
+    consumed_at TEXT,
+    received_at TEXT NOT NULL
+);
 "#;

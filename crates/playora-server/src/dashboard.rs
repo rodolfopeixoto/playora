@@ -12,6 +12,125 @@ pub struct DeleteRomForm {
     pub rom_path: String,
 }
 
+#[derive(Deserialize)]
+pub struct CloudTokenForm {
+    pub token: String,
+}
+
+pub async fn cloud_setup_submit(
+    AxState(state): AxState<State>,
+    AxPath(device_id): AxPath<String>,
+    Form(form): Form<CloudTokenForm>,
+) -> Redirect {
+    let conn = state.lock().await;
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO cloud_auth_tokens(device_id, token, consumed_at, received_at) VALUES (?1, ?2, NULL, ?3)",
+        rusqlite::params![device_id, form.token, chrono::Utc::now().to_rfc3339()],
+    );
+    Redirect::to(&format!("/dashboard/cloud-setup/{device_id}?submitted=1"))
+}
+
+pub async fn cloud_setup_page(
+    AxState(state): AxState<State>,
+    AxPath(device_id): AxPath<String>,
+) -> Html<String> {
+    // Pull the latest authorize command from this device's most recent
+    // Cloud Setup activity event so the dashboard can show the exact
+    // blob the user has to paste into `rclone authorize`.
+    let conn = state.lock().await;
+    let summary: Option<String> = conn
+        .query_row(
+            "SELECT summary FROM activities WHERE device_id=?1 AND script='Cloud Setup' ORDER BY id DESC LIMIT 1",
+            [device_id.clone()],
+            |r| r.get(0),
+        )
+        .ok();
+    let consumed: Option<String> = conn
+        .query_row(
+            "SELECT consumed_at FROM cloud_auth_tokens WHERE device_id=?1",
+            [device_id.clone()],
+            |r| r.get(0),
+        )
+        .ok();
+
+    let auth_cmd = summary
+        .as_deref()
+        .and_then(|s| s.split("AUTH_CMD:").nth(1).map(|s| s.trim().to_string()))
+        .unwrap_or_default();
+
+    let status_block = if let Some(t) = consumed {
+        format!(
+            "<div class=\"ok-banner\">✓ Token received (consumed at <code>{}</code>). The agent has written rclone.conf.</div>",
+            esc(&t)
+        )
+    } else if auth_cmd.is_empty() {
+        "<div class=\"warn-banner\">No active Cloud Setup. Click <code>Ports → Playora Cloud Setup</code> on the console first, then refresh this page.</div>".to_string()
+    } else {
+        String::new()
+    };
+
+    let html = format!(
+        r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cloud Setup · Playora</title>
+<style>{css}
+.ok-banner{{background:#0f2818;color:#5fbf76;padding:14px;border-radius:8px;margin:14px 0;font-size:14px}}
+.warn-banner{{background:#2a1f0a;color:#d4a648;padding:14px;border-radius:8px;margin:14px 0;font-size:14px}}
+.step{{margin:18px 0;padding:14px;border:1px solid #1f1f26;border-radius:8px;background:#101015}}
+.step h3{{margin:0 0 8px 0;font-size:14px;color:#9aa}}
+pre.cmd{{background:#0a0a0a;border:1px solid #1f1f1f;padding:12px;border-radius:6px;overflow:auto;font-size:12px;color:#9ad;white-space:pre-wrap;word-break:break-all}}
+textarea{{width:100%;min-height:140px;background:#0a0a0a;color:#cfcfcf;border:1px solid #1f1f1f;border-radius:6px;padding:10px;font-family:monospace;font-size:12px}}
+button.submit{{background:#1a3d5c;color:#7c9eff;border:1px solid #2a5078;border-radius:6px;padding:10px 20px;cursor:pointer;font-size:13px;margin-top:10px}}
+button.submit:hover{{background:#234e75}}
+.qr-box{{text-align:center;padding:20px;background:#fff;border-radius:8px;display:inline-block}}
+.qr-box img{{display:block;max-width:240px}}
+</style></head>
+<body><div class="wrap">
+{hdr}
+<h1>Cloud Setup — Google Drive</h1>
+<p class="sub">Device <code>{did}</code></p>
+{status_block}
+<p>This device has no browser, so authorization happens on your computer (any machine with <code>rclone</code> installed). Follow the steps below — your phone or PC works equally well.</p>
+
+<div class="step">
+<h3>Step 1 · Install rclone on your PC (one-time)</h3>
+<pre class="cmd">brew install rclone     # macOS
+sudo apt install rclone  # Debian/Ubuntu
+winget install Rclone.Rclone  # Windows</pre>
+</div>
+
+<div class="step">
+<h3>Step 2 · On your PC, run the command below</h3>
+<p class="muted">This opens your browser, signs in to Google, and prints a JSON token.</p>
+<pre class="cmd">{auth_cmd_html}</pre>
+</div>
+
+<div class="step">
+<h3>Step 3 · Paste the JSON token here</h3>
+<form method="post" action="/dashboard/cloud-setup/{did}">
+    <textarea name="token" placeholder='{{"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}}'></textarea>
+    <button class="submit" type="submit">Send token to device</button>
+</form>
+</div>
+
+<div class="step">
+<h3>Step 4 · Wait ~5 seconds</h3>
+<p class="muted">The agent polls this server every 5s. Once the token arrives, rclone writes its config and the Cloud Setup activity finishes with status <span class="pill ok">ok</span>. Then your <code>Cloud Backup</code> / <code>Cloud Restore</code> ports will work.</p>
+</div>
+
+</div></body></html>"#,
+        css = CSS,
+        hdr = header("devices"),
+        did = esc(&device_id),
+        status_block = status_block,
+        auth_cmd_html = if auth_cmd.is_empty() {
+            "(waiting — start <em>Playora Cloud Setup</em> on the console)".to_string()
+        } else {
+            esc(&auth_cmd)
+        }
+    );
+    Html(html)
+}
+
 pub async fn delete_rom_form(
     AxState(state): AxState<State>,
     AxPath(device_id): AxPath<String>,

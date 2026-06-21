@@ -84,6 +84,14 @@ async fn main() -> Result<()> {
         )
         .route("/api/v1/devices/:id/delete-ack", post(routes::delete_ack))
         .route(
+            "/api/v1/devices/:id/cloud-auth-token",
+            get(routes::cloud_auth_fetch).post(routes::cloud_auth_submit),
+        )
+        .route(
+            "/dashboard/cloud-setup/:id",
+            get(dashboard::cloud_setup_page).post(dashboard::cloud_setup_submit),
+        )
+        .route(
             "/dashboard/device/:id/delete-rom",
             post(dashboard::delete_rom_form),
         )

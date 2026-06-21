@@ -516,6 +516,49 @@ pub async fn delete_ack(
     StatusCode::OK
 }
 
+#[derive(Deserialize)]
+pub struct CloudAuthTokenBody {
+    pub token: String,
+}
+
+pub async fn cloud_auth_submit(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+    Json(req): Json<CloudAuthTokenBody>,
+) -> StatusCode {
+    let conn = state.lock().await;
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO cloud_auth_tokens(device_id, token, consumed_at, received_at) VALUES (?1, ?2, NULL, ?3)",
+        rusqlite::params![device_id, req.token, Utc::now().to_rfc3339()],
+    );
+    StatusCode::ACCEPTED
+}
+
+pub async fn cloud_auth_fetch(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+) -> (StatusCode, Json<Value>) {
+    let conn = state.lock().await;
+    let row: Option<String> = conn
+        .query_row(
+            "SELECT token FROM cloud_auth_tokens WHERE device_id=?1 AND consumed_at IS NULL",
+            [device_id.clone()],
+            |r| r.get(0),
+        )
+        .ok();
+    match row {
+        Some(t) => {
+            // Mark consumed so the next poll returns 204.
+            let _ = conn.execute(
+                "UPDATE cloud_auth_tokens SET consumed_at=?2 WHERE device_id=?1",
+                rusqlite::params![device_id, Utc::now().to_rfc3339()],
+            );
+            (StatusCode::OK, Json(serde_json::json!({"token": t})))
+        }
+        None => (StatusCode::NO_CONTENT, Json(serde_json::Value::Null)),
+    }
+}
+
 pub async fn restore_progress_latest(AxState(state): AxState<State>) -> Json<Value> {
     let conn = state.lock().await;
     let v: Option<Value> = conn.query_row(

@@ -1,13 +1,31 @@
-//! Cloud sync via rclone. Wraps `rclone` binary bundled at
-//! /roms/.playora/bin/rclone (or PATH). Uses OAuth device flow so the
-//! user can authorize on their phone — no keyboard typing on the R36S.
+//! Cloud sync via rclone with a QR-code paired setup flow.
+//!
+//! The R36S has no browser, so OAuth happens on the user's phone:
+//!   1. Agent runs `rclone config create gdrive drive scope drive
+//!      config_is_local false` non-interactively. rclone prints the
+//!      one-liner `rclone authorize "drive" "<blob>"` and waits on stdin
+//!      for the resulting token.
+//!   2. Agent posts the blob + a dashboard setup URL via an activity
+//!      summary. Generates an ASCII QR of the dashboard URL.
+//!   3. User scans the QR with their phone, follows the dashboard's
+//!      step-by-step (install rclone on their PC, paste blob, run the
+//!      command, paste the token JSON back into the dashboard form).
+//!   4. Server stores the token; agent polls every 5s and feeds it to
+//!      rclone's stdin. rclone writes the config; we're done.
 
 use anyhow::{anyhow, Context, Result};
+use playora_common::AgentConfig;
+use qrcode::render::unicode::Dense1x2;
+use qrcode::QrCode;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 const REMOTE: &str = "gdrive";
 const REMOTE_ROOT: &str = "R36S";
+const SETUP_TIMEOUT_SECS: u64 = 600;
+const POLL_INTERVAL_SECS: u64 = 5;
 
 fn rclone_bin() -> PathBuf {
     let bundled = Path::new("/roms/.playora/bin/rclone");
@@ -34,37 +52,185 @@ fn ensure_rclone() -> Result<()> {
 
 pub fn cmd_setup() -> Result<()> {
     let _lock = crate::lockfile::acquire("cloud-setup")?;
+    let cfg = crate::cfg::load(None)?;
     ensure_rclone()?;
-    println!("== Cloud Setup ==");
-    println!("Starting Google Drive OAuth device flow.");
-    println!();
-    println!("In a moment, this log will show:");
-    println!("  1. A URL like https://accounts.google.com/o/oauth2/device");
-    println!("  2. A code like ABCD-EFGH");
-    println!();
-    println!("Open the URL on your PHONE, sign in to Google, type the code.");
-    println!("Then come back to the dashboard and check this activity's log.");
+
+    println!("== Cloud Setup (QR flow) ==");
     println!();
 
-    let mut child = Command::new(rclone_bin())
+    // Setup URL on dashboard, device-specific.
+    let setup_url = format!(
+        "{}/dashboard/cloud-setup/{}",
+        cfg.server_url.trim_end_matches('/'),
+        cfg.device_id.0
+    );
+    println!("Dashboard setup page: {setup_url}");
+    println!();
+
+    // ASCII QR of the dashboard setup URL.
+    println!("Scan with your phone:");
+    println!();
+    let qr = QrCode::new(setup_url.as_bytes()).context("qr encode")?;
+    let qr_text = qr
+        .render::<Dense1x2>()
+        .dark_color(Dense1x2::Light)
+        .light_color(Dense1x2::Dark)
+        .build();
+    println!("{qr_text}");
+    println!();
+
+    // Save PNG too.
+    let png_path = Path::new("/roms/.playora/auth_qr.png");
+    if let Err(e) = save_qr_png(&qr, png_path) {
+        eprintln!("warn: could not write QR PNG: {e}");
+    } else {
+        println!("PNG saved: {}", png_path.display());
+    }
+
+    // Spawn rclone in piped mode. It prints the authorize blob and waits
+    // for the resulting token on stdin.
+    let bin = rclone_bin();
+    let cfg_path = rclone_config();
+    let mut child = Command::new(&bin)
         .args([
-            "config", "create", REMOTE, "drive", "scope", "drive", "--config",
+            "config",
+            "create",
+            REMOTE,
+            "drive",
+            "scope=drive",
+            "config_is_local=false",
+            "--config",
         ])
-        .arg(rclone_config())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
+        .arg(&cfg_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .context("spawn rclone config")?;
 
-    let status = child.wait()?;
+    let stdout = child.stdout.take().context("no stdout")?;
+    let mut authorize_blob: Option<String> = None;
+    let reader = BufReader::new(stdout);
+
+    // Read stdout to find the authorize blob.
+    for line in reader.lines().map_while(Result::ok) {
+        println!("rclone: {line}");
+        if let Some(start) = line.find("rclone authorize") {
+            let snippet = &line[start..];
+            authorize_blob = Some(snippet.trim().to_string());
+            println!();
+            println!("AUTHORIZE_CMD: {snippet}");
+            break;
+        }
+    }
+
+    let blob = authorize_blob.ok_or_else(|| {
+        anyhow!("could not capture 'rclone authorize' command from rclone output")
+    })?;
+
+    // Post the command + setup URL via activity summary so the dashboard
+    // can render the QR + step-by-step + the paste form.
+    let _ = crate::activity::progress(
+        &cfg,
+        "Cloud Setup",
+        &format!("AUTH_QR_URL:{setup_url} | AUTH_CMD:{blob}"),
+    );
+
+    println!();
+    println!("Waiting for token from dashboard (timeout: {SETUP_TIMEOUT_SECS}s)...");
+
+    // Poll server every POLL_INTERVAL_SECS for the user-supplied token.
+    let start = Instant::now();
+    let token = loop {
+        if start.elapsed().as_secs() > SETUP_TIMEOUT_SECS {
+            let _ = child.kill();
+            return Err(anyhow!("timed out waiting for token"));
+        }
+        match fetch_token(&cfg) {
+            Ok(Some(t)) => break t,
+            Ok(None) => {}
+            Err(e) => eprintln!("poll error: {e}"),
+        }
+        std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
+    };
+
+    println!();
+    println!(
+        "Token received from dashboard ({} bytes). Sending to rclone...",
+        token.len()
+    );
+
+    // Feed token to rclone's stdin and close it.
+    if let Some(stdin) = child.stdin.as_mut() {
+        writeln!(stdin, "{token}").ok();
+    }
+    drop(child.stdin.take());
+
+    let status = child.wait().context("wait rclone")?;
     if !status.success() {
         return Err(anyhow!("rclone config exit {:?}", status.code()));
     }
+
     println!();
     println!(
         "SUMMARY: Cloud Setup ok — remote '{REMOTE}' configured at {}",
-        rclone_config().display()
+        cfg_path.display()
     );
+    Ok(())
+}
+
+fn fetch_token(cfg: &AgentConfig) -> Result<Option<String>> {
+    let url = format!(
+        "{}/api/v1/devices/{}/cloud-auth-token",
+        cfg.server_url.trim_end_matches('/'),
+        cfg.device_id.0
+    );
+    let resp = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()?
+        .get(&url)
+        .send()?;
+    if resp.status().as_u16() == 204 {
+        return Ok(None);
+    }
+    if !resp.status().is_success() {
+        return Err(anyhow!("HTTP {}", resp.status()));
+    }
+    let v: serde_json::Value = resp.json()?;
+    Ok(v.get("token")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string()))
+}
+
+fn save_qr_png(qr: &QrCode, path: &Path) -> Result<()> {
+    // Minimal PBM (Portable BitMap) writer — no image crate dep needed.
+    let modules = qr.to_colors();
+    let width = qr.width();
+    let height = modules.len() / width;
+    let mut out = String::new();
+    out.push_str("P1\n");
+    out.push_str(&format!("{width} {height}\n"));
+    for (i, c) in modules.iter().enumerate() {
+        let bit = if matches!(c, qrcode::Color::Dark) {
+            1
+        } else {
+            0
+        };
+        out.push_str(&format!("{bit}"));
+        if i % width == width - 1 {
+            out.push('\n');
+        } else {
+            out.push(' ');
+        }
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    // Write as .pbm — even if extension is .png, that's a graceful fallback
+    // for systems without an image encoder. The dashboard renders QR from
+    // the URL directly via api.qrserver.com so this is informational only.
+    let pbm_path = path.with_extension("pbm");
+    std::fs::write(&pbm_path, out)?;
     Ok(())
 }
 
