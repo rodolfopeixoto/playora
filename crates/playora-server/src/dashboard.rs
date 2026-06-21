@@ -49,11 +49,13 @@ fn header(active: &str) -> String {
                 <a class="{}" href="/dashboard">Overview</a>
                 <a class="{}" href="/dashboard/devices">Devices</a>
                 <a class="{}" href="/dashboard/games">Games</a>
+                <a class="{}" href="/dashboard/activity">Activity</a>
             </nav>
         </header>"#,
         mark("overview"),
         mark("devices"),
-        mark("games")
+        mark("games"),
+        mark("activity")
     )
 }
 
@@ -194,15 +196,52 @@ pub async fn page(AxState(state): AxState<State>) -> Html<String> {
         events_html.push_str("<tr><td colspan=3 class=\"empty\">No events yet.</td></tr>");
     }
 
+    let mut activity_html = String::new();
+    let mut stmt = conn.prepare("SELECT script, status, started_at, COALESCE(ended_at,''), COALESCE(exit_code,-1) FROM activities ORDER BY id DESC LIMIT 8").unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, i64>(4)?,
+            ))
+        })
+        .unwrap();
+    for (script, status, started, ended, code) in rows.flatten() {
+        let pill_class = match status.as_str() {
+            "ok" => "pill ok",
+            "fail" => "pill err",
+            _ => "pill warn",
+        };
+        let when_label = if ended.is_empty() {
+            format!("started {}", relative_time(&started))
+        } else {
+            format!("finished {}", relative_time(&ended))
+        };
+        activity_html.push_str(&format!(
+            "<tr><td>{}</td><td><span class=\"{}\">{}</span></td><td class=\"muted\">{}</td><td class=\"muted\">{}</td></tr>",
+            esc(&script), pill_class, esc(&status), esc(&when_label),
+            if code >= 0 { format!("exit {code}") } else { String::new() }
+        ));
+    }
+    if activity_html.is_empty() {
+        activity_html.push_str("<tr><td colspan=4 class=\"empty\">No menu activity yet. Open <code>Ports → Playora Doctor</code> on the device.</td></tr>");
+    }
+
     let html = format!(
         r#"<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Playora Hub</title>
-<meta http-equiv="refresh" content="15">
-<style>{css}</style></head>
+<meta http-equiv="refresh" content="10">
+<style>{css}.pill.ok{{background:#0f2818;color:#5fbf76}}.pill.warn{{background:#2a1f0a;color:#d4a648}}.pill.err{{background:#2a0f0f;color:#d65656}}</style></head>
 <body><div class="wrap">
 {hdr}
 <h1>Overview</h1>
-<p class="sub">Auto-refresh every 15s · last heartbeat: <code>{last_hb}</code></p>
+<p class="sub">Auto-refresh every 10s · last heartbeat: <code>{last_hb}</code></p>
+
+<h2>Recent activity</h2>
+<table><thead><tr><th>Script</th><th>Status</th><th>When</th><th></th></tr></thead><tbody>{activity_html}</tbody></table>
 
 <div class="grid">
     <div class="card"><div class="l">Devices</div><div class="v">{devices}</div></div>
@@ -270,6 +309,53 @@ pub async fn devices_list_page(AxState(state): AxState<State>) -> Html<String> {
         r#"<!doctype html><html><head><meta charset="utf-8"><title>Devices · Playora</title><style>{css}</style></head><body><div class="wrap">{hdr}<h1>Devices</h1><table><thead><tr><th>Name</th><th>Profile</th><th>ID</th><th>Agent</th><th>Last seen</th></tr></thead><tbody>{rows_html}</tbody></table></div></body></html>"#,
         css = CSS,
         hdr = header("devices")
+    );
+    Html(html)
+}
+
+pub async fn activity_page(AxState(state): AxState<State>) -> Html<String> {
+    let conn = state.lock().await;
+    let mut rows_html = String::new();
+    let mut stmt = conn.prepare("SELECT device_id, script, status, started_at, COALESCE(ended_at,''), COALESCE(exit_code,-1) FROM activities ORDER BY id DESC LIMIT 200").unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i64>(5)?,
+            ))
+        })
+        .unwrap();
+    for (did, script, status, started, ended, code) in rows.flatten() {
+        let pill_class = match status.as_str() {
+            "ok" => "pill ok",
+            "fail" => "pill err",
+            _ => "pill warn",
+        };
+        let when_label = if ended.is_empty() {
+            format!("started {}", relative_time(&started))
+        } else {
+            format!("finished {}", relative_time(&ended))
+        };
+        rows_html.push_str(&format!(
+            "<tr><td>{}</td><td><span class=\"{}\">{}</span></td><td><a href=\"/dashboard/device/{}\"><code>{}</code></a></td><td class=\"muted\">{}</td><td class=\"muted\">{}</td></tr>",
+            esc(&script), pill_class, esc(&status),
+            esc(&did), esc(&did),
+            esc(&when_label),
+            if code >= 0 { format!("exit {code}") } else { String::new() }
+        ));
+    }
+    if rows_html.is_empty() {
+        rows_html
+            .push_str("<tr><td colspan=5 class=\"empty\">No menu activity recorded yet.</td></tr>");
+    }
+    let html = format!(
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>Activity · Playora</title><meta http-equiv="refresh" content="10"><style>{css}.pill.ok{{background:#0f2818;color:#5fbf76}}.pill.warn{{background:#2a1f0a;color:#d4a648}}.pill.err{{background:#2a0f0f;color:#d65656}}</style></head><body><div class="wrap">{hdr}<h1>Activity</h1><p class="sub">Every menu click on the console shows up here within seconds.</p><table><thead><tr><th>Script</th><th>Status</th><th>Device</th><th>When</th><th></th></tr></thead><tbody>{rows_html}</tbody></table></div></body></html>"#,
+        css = CSS,
+        hdr = header("activity")
     );
     Html(html)
 }

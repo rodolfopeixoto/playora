@@ -12,14 +12,12 @@ PORTS_DIR="$SD/ports"
 LOG_DIR="$SD/.playora/logs"
 mkdir -p "$PLAYORA_DIR" "$PORTS_DIR" "$LOG_DIR"
 
+# Sweep any leftover Playora *.sh (and .bak.* files) from prior generators.
+find "$PORTS_DIR" -maxdepth 1 -type f -name "Playora *.sh*" -print -delete 2>/dev/null || true
+
 cp "$BIN" "$PLAYORA_DIR/playora-agent"
 chmod 0755 "$PLAYORA_DIR/playora-agent"
 
-# Each port is a short, NON-INTERACTIVE shell script that:
-#  - runs the agent command in background
-#  - writes the result to a log file
-#  - syncs to the server so the dashboard reflects it
-#  - returns immediately so ES never freezes (no kill, no chvt, no tty redirect)
 write_port() {
     name="$1"; cmd="$2"
     file="$PORTS_DIR/Playora ${name}.sh"
@@ -31,13 +29,15 @@ mkdir -p /roms/.playora/logs
 {
     echo "==== \$(date) ===="
     echo "command: ${cmd}"
-    echo
     cd /roms/.playora
+    ./playora-agent --config /roms/.playora/agent.toml activity-begin "${name}"
     timeout 60 ./playora-agent --config /roms/.playora/agent.toml ${cmd}
-    echo
-    echo "exit: \$?"
+    RC=\$?
+    ./playora-agent --config /roms/.playora/agent.toml activity-end "${name}" "\$RC"
     timeout 10 ./playora-agent --config /roms/.playora/agent.toml sync >/dev/null 2>&1
+    echo "exit: \$RC"
 } > "\$LOG" 2>&1 &
+sleep 1
 exit 0
 EOF
     chmod 0755 "$file"
@@ -54,7 +54,25 @@ write_port "Kodi Setup"      "kodi setup"
 write_port "Scan ROMs"       "scan"
 write_port "Heartbeat"       "heartbeat"
 
-# Autostart: runs `playora-agent run` (heartbeat + sync loop)
+cat > "$PORTS_DIR/Playora Recover.sh" <<'EOF'
+#!/bin/sh
+LOG="/roms/.playora/logs/recover_$(date +%Y%m%d_%H%M%S).log"
+mkdir -p /roms/.playora/logs
+{
+    echo "==== $(date) ===="
+    sudo killall -9 playora-agent 2>/dev/null
+    sudo killall -9 gptokeyb 2>/dev/null
+    sudo systemctl restart emulationstation 2>/dev/null \
+        || sudo systemctl start emulationstation 2>/dev/null \
+        || (cd /; nohup emulationstation >/dev/null 2>&1 &)
+    echo "recover done"
+} > "$LOG" 2>&1 &
+sleep 1
+exit 0
+EOF
+chmod 0755 "$PORTS_DIR/Playora Recover.sh"
+echo "[install] wrote $PORTS_DIR/Playora Recover.sh"
+
 cat > "$PLAYORA_DIR/autostart.sh" <<'EOF'
 #!/bin/sh
 mkdir -p /roms/.playora/logs
@@ -88,13 +106,13 @@ UNIT
         sudo systemctl daemon-reload
         sudo systemctl enable --now playora-agent.service
     fi
-    timeout 5 /roms/.playora/playora-agent --config /roms/.playora/agent.toml status
+    /roms/.playora/playora-agent --config /roms/.playora/agent.toml activity-end "Autosync Enable" 0
 } > "\$LOG" 2>&1 &
+sleep 1
 exit 0
 EOF
 chmod 0755 "$PORTS_DIR/Playora Autosync Enable.sh"
 
-# First-run config
 CFG="$PLAYORA_DIR/agent.toml"
 if [ ! -f "$CFG" ]; then
     SERVER_URL="${PLAYORA_SERVER_URL:-http://192.168.3.82:8080}"
@@ -131,5 +149,5 @@ find "$SD" -name ".DS_Store" -delete 2>/dev/null || true
 
 sync
 echo
-echo "Playora installed. Every Port runs in background, never freezes ES."
-echo "Results show up at:  http://${PLAYORA_SERVER_URL:-192.168.3.82:8080}/dashboard"
+echo "Playora installed. Every Port is fire-and-forget. ES never freezes."
+echo "Watch results live: ${PLAYORA_SERVER_URL:-http://192.168.3.82:8080}/dashboard"

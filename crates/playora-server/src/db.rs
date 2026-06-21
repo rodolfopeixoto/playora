@@ -109,6 +109,27 @@ CREATE TABLE IF NOT EXISTS events (
     device_id TEXT, event_type TEXT, payload_json TEXT, received_at TEXT
 );
 CREATE INDEX IF NOT EXISTS events_device_idx ON events(device_id);
+CREATE TABLE IF NOT EXISTS activities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT,
+    script TEXT,
+    status TEXT,
+    started_at TEXT,
+    ended_at TEXT,
+    exit_code INTEGER,
+    log_path TEXT
+);
+CREATE INDEX IF NOT EXISTS activities_device_idx ON activities(device_id);
+CREATE TABLE IF NOT EXISTS restore_progress (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT,
+    bytes_done INTEGER,
+    bytes_total INTEGER,
+    files_done INTEGER,
+    current_path TEXT,
+    received_at TEXT
+);
+CREATE INDEX IF NOT EXISTS restore_progress_device_idx ON restore_progress(device_id);
 CREATE TABLE IF NOT EXISTS game_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT UNIQUE,

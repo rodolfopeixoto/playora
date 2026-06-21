@@ -1,5 +1,6 @@
 //! playora-agent — runs on the R36S, captures runtime data, syncs to server.
 
+mod activity;
 mod catalog;
 mod cfg;
 mod coolrom;
@@ -160,6 +161,10 @@ enum Cmd {
     },
     /// Run a quick diagnostic + hardware snapshot + sync in one shot (background)
     QuickSync,
+    /// Mark a script as started (POSTs an Activity event to the server right away)
+    ActivityBegin { script: String },
+    /// Mark a script as finished, with exit code
+    ActivityEnd { script: String, exit_code: i32 },
 }
 
 #[derive(Subcommand)]
@@ -530,6 +535,14 @@ fn main() -> Result<()> {
             let _ = sync::cmd_heartbeat(cfg.clone());
             let _ = sync::cmd_sync_once(cfg);
             Ok(())
+        }
+        Cmd::ActivityBegin { script } => {
+            let cfg = load_cfg(cli.config.as_deref())?;
+            activity::begin(&cfg, &script)
+        }
+        Cmd::ActivityEnd { script, exit_code } => {
+            let cfg = load_cfg(cli.config.as_deref())?;
+            activity::end(&cfg, &script, exit_code)
         }
     }
 }

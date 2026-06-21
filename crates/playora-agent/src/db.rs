@@ -108,6 +108,8 @@ fn event_type_str(p: &playora_common::EventPayload) -> &'static str {
         GameSessionFinished(_) => "game_session_finished",
         RomScanned(_) => "rom_scanned",
         SaveSnapshot(_) => "save_snapshot",
+        Activity(_) => "activity",
+        RestoreProgress(_) => "restore_progress",
     }
 }
 

@@ -143,6 +143,8 @@ pub async fn events_batch(
             EventPayload::GameSessionFinished(_) => "game_session_finished",
             EventPayload::RomScanned(_) => "rom_scanned",
             EventPayload::SaveSnapshot(_) => "save_snapshot",
+            EventPayload::Activity(_) => "activity",
+            EventPayload::RestoreProgress(_) => "restore_progress",
         };
         let r = conn.execute(
             "INSERT INTO events(event_id,device_id,event_type,payload_json,received_at) VALUES (?1,?2,?3,?4,?5)",
@@ -166,6 +168,26 @@ pub async fn events_batch(
                     let _ = conn.execute(
                         "INSERT INTO resource_samples(device_id, payload_json, received_at) VALUES (?1, ?2, ?3)",
                         rusqlite::params![ev.device_id.0, serde_json::to_string(&rs).unwrap_or_default(), Utc::now().to_rfc3339()],
+                    );
+                } else if let EventPayload::Activity(a) = &ev.payload {
+                    let status_str = match a.status {
+                        ActivityStatus::Running => "running",
+                        ActivityStatus::Ok => "ok",
+                        ActivityStatus::Fail => "fail",
+                    };
+                    let _ = conn.execute(
+                        "INSERT INTO activities(device_id, script, status, started_at, ended_at, exit_code, log_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        rusqlite::params![
+                            ev.device_id.0, a.script, status_str,
+                            a.started_at.to_rfc3339(),
+                            a.ended_at.map(|t| t.to_rfc3339()),
+                            a.exit_code, a.log_path,
+                        ],
+                    );
+                } else if let EventPayload::RestoreProgress(p) = &ev.payload {
+                    let _ = conn.execute(
+                        "INSERT INTO restore_progress(device_id, bytes_done, bytes_total, files_done, current_path, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        rusqlite::params![ev.device_id.0, p.bytes_done as i64, p.bytes_total as i64, p.files_done as i64, p.current_path, Utc::now().to_rfc3339()],
                     );
                 }
                 if let EventPayload::GameSessionStarted(g) = &ev.payload {
@@ -340,6 +362,39 @@ pub async fn ranking_playtime(AxState(state): AxState<State>) -> Json<Vec<Value>
         "game": r.get::<_,String>(0)?, "system": r.get::<_,String>(1)?, "duration_seconds": r.get::<_,i64>(2)?
     }))).unwrap();
     Json(rows.flatten().collect())
+}
+
+pub async fn activities_recent(AxState(state): AxState<State>) -> Json<Vec<Value>> {
+    let conn = state.lock().await;
+    let mut stmt = conn.prepare("SELECT device_id, script, status, started_at, COALESCE(ended_at,''), COALESCE(exit_code, -1) FROM activities ORDER BY id DESC LIMIT 50").unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(serde_json::json!({
+                "device_id": r.get::<_,String>(0)?,
+                "script":    r.get::<_,String>(1)?,
+                "status":    r.get::<_,String>(2)?,
+                "started_at":r.get::<_,String>(3)?,
+                "ended_at":  r.get::<_,String>(4)?,
+                "exit_code": r.get::<_,i64>(5)?,
+            }))
+        })
+        .unwrap();
+    Json(rows.flatten().collect())
+}
+
+pub async fn restore_progress_latest(AxState(state): AxState<State>) -> Json<Value> {
+    let conn = state.lock().await;
+    let v: Option<Value> = conn.query_row(
+        "SELECT bytes_done, bytes_total, files_done, COALESCE(current_path,''), received_at FROM restore_progress ORDER BY id DESC LIMIT 1",
+        [], |r| Ok(serde_json::json!({
+            "bytes_done":   r.get::<_,i64>(0)?,
+            "bytes_total":  r.get::<_,i64>(1)?,
+            "files_done":   r.get::<_,i64>(2)?,
+            "current_path": r.get::<_,String>(3)?,
+            "received_at":  r.get::<_,String>(4)?,
+        }))
+    ).ok();
+    Json(v.unwrap_or_else(|| serde_json::json!({"bytes_done":0,"bytes_total":0,"files_done":0,"current_path":"","received_at":""})))
 }
 
 pub async fn analytics_overview(AxState(state): AxState<State>) -> Json<Value> {

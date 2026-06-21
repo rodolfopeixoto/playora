@@ -311,6 +311,33 @@ pub struct DeviceHeartbeat {
     pub captured_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityStatus {
+    Running,
+    Ok,
+    Fail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Activity {
+    pub script: String,
+    pub status: ActivityStatus,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub exit_code: Option<i32>,
+    pub log_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreProgress {
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub files_done: u64,
+    pub current_path: Option<String>,
+    pub captured_at: DateTime<Utc>,
+}
+
 // ============================================================
 // Sync envelope
 // ============================================================
@@ -326,6 +353,8 @@ pub enum EventPayload {
     GameSessionFinished(GameSessionFinished),
     RomScanned(RomScanned),
     SaveSnapshot(SaveSnapshot),
+    Activity(Activity),
+    RestoreProgress(RestoreProgress),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

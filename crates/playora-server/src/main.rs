@@ -72,9 +72,15 @@ async fn main() -> Result<()> {
             "/api/v1/analytics/overview",
             get(routes::analytics_overview),
         )
+        .route("/api/v1/activities/recent", get(routes::activities_recent))
+        .route(
+            "/api/v1/restore/progress",
+            get(routes::restore_progress_latest),
+        )
         .route("/dashboard", get(dashboard::page))
         .route("/dashboard/devices", get(dashboard::devices_list_page))
         .route("/dashboard/games", get(dashboard::games_list_page))
+        .route("/dashboard/activity", get(dashboard::activity_page))
         .route("/dashboard/device/:id", get(dashboard::device_page))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
