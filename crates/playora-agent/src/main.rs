@@ -9,6 +9,7 @@ mod features;
 mod hw;
 mod launcher;
 mod myrient;
+mod portmaster;
 mod resources;
 mod saves;
 mod scanner;
@@ -132,6 +133,24 @@ enum Cmd {
         #[arg(long, default_value = "playora")]
         repo: String,
     },
+    /// PortMaster: list/search/install ports (Counter-Strike-like, Half-Life, etc.)
+    #[command(subcommand)]
+    Portmaster(PortmasterCmd),
+}
+
+#[derive(Subcommand)]
+enum PortmasterCmd {
+    /// Fetch live catalog and list titles
+    List {
+        #[arg(long)]
+        ready_to_run_only: bool,
+    },
+    /// Search the catalog by title/genre
+    Search { query: String },
+    /// Install a port by its catalog name (e.g. `vvvvvv`)
+    Install { name: String },
+    /// Show already-installed ports
+    Installed,
 }
 
 #[derive(Subcommand)]
@@ -403,6 +422,76 @@ fn main() -> Result<()> {
             println!("{s}");
             Ok(())
         }
+        Cmd::Portmaster(c) => match c {
+            PortmasterCmd::List { ready_to_run_only } => {
+                let cat = portmaster::fetch_catalog()?;
+                for p in &cat.ports {
+                    if ready_to_run_only && !p.attr.rtr {
+                        continue;
+                    }
+                    let req = if p.items.is_empty() { "" } else { " *" };
+                    println!(
+                        "{:<40} {:<28} {}{}",
+                        truncate(&p.attr.title, 40),
+                        p.name,
+                        p.attr.genres.join(","),
+                        req
+                    );
+                }
+                println!("\n* requires game data files (place in /roms/ports/<name>/)");
+                Ok(())
+            }
+            PortmasterCmd::Search { query } => {
+                let cat = portmaster::fetch_catalog()?;
+                for p in portmaster::search(&cat, &query) {
+                    println!("{:<40} {}", truncate(&p.attr.title, 40), p.name);
+                }
+                Ok(())
+            }
+            PortmasterCmd::Install { name } => {
+                let cat = portmaster::fetch_catalog()?;
+                let entry = cat
+                    .ports
+                    .iter()
+                    .find(|p| p.name == name || p.attr.title.eq_ignore_ascii_case(&name))
+                    .ok_or_else(|| anyhow::anyhow!("not found: {name}"))?;
+                let report = portmaster::install(entry, |dl, total| {
+                    let pct = total.map(|t| (dl as f64 / t as f64) * 100.0);
+                    if let Some(p) = pct {
+                        print!("\r{p:.1}% ({dl} bytes)");
+                    } else {
+                        print!("\r{dl} bytes");
+                    }
+                    use std::io::Write as _;
+                    std::io::stdout().flush().ok();
+                })?;
+                println!(
+                    "\ninstalled {} ({} files){}",
+                    report.port_name,
+                    report.installed_files,
+                    if report.requires_data {
+                        " — needs game data files"
+                    } else {
+                        ""
+                    }
+                );
+                Ok(())
+            }
+            PortmasterCmd::Installed => {
+                for p in portmaster::list_installed() {
+                    println!("{p}");
+                }
+                Ok(())
+            }
+        },
+    }
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n - 1).collect::<String>())
     }
 }
 
