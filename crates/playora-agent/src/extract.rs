@@ -109,6 +109,16 @@ fn which(tool: &str) -> Option<PathBuf> {
 /// Walk inbox for archives, extract to temp, route every ROM into /roms/<system>/.
 /// Routing by extension. Ambiguous (zip/7z) → stays in temp + warning.
 pub fn cmd_extract_roms(inbox: &str, roms_root: &str, keep: bool) -> Result<()> {
+    let cfg = crate::cfg::load(None).ok();
+    cmd_extract_roms_inner(inbox, roms_root, keep, cfg.as_ref())
+}
+
+fn cmd_extract_roms_inner(
+    inbox: &str,
+    roms_root: &str,
+    keep: bool,
+    cfg: Option<&playora_common::AgentConfig>,
+) -> Result<()> {
     use playora_common::systems::SYSTEMS;
     use std::collections::HashMap;
 
@@ -132,6 +142,15 @@ pub fn cmd_extract_roms(inbox: &str, roms_root: &str, keep: bool) -> Result<()> 
     let mut routed = 0;
     let mut unrouted = 0;
     let mut errors = 0;
+    let report_progress = |routed: u32, archives: u32, current: &str| {
+        if let Some(c) = cfg {
+            let _ = crate::activity::progress(
+                c,
+                "Extract ROMs",
+                &format!("{routed} files routed · {archives} archives · current: {current}"),
+            );
+        }
+    };
 
     let entries: Vec<_> = std::fs::read_dir(inbox_p)
         .with_context(|| format!("read {inbox}"))?
@@ -167,6 +186,9 @@ pub fn cmd_extract_roms(inbox: &str, roms_root: &str, keep: bool) -> Result<()> 
                 } else {
                     println!("routed {name} -> {}/", folder);
                     routed += 1;
+                    if routed % 5 == 0 {
+                        report_progress(routed, archive_count, &name);
+                    }
                 }
             } else {
                 println!("skip (unknown ext .{ext}): {name}");
@@ -179,6 +201,7 @@ pub fn cmd_extract_roms(inbox: &str, roms_root: &str, keep: bool) -> Result<()> 
         let tmp = inbox_p.join(format!(".extract_{}", std::process::id()));
         std::fs::create_dir_all(&tmp).ok();
         println!("==> extracting {name}");
+        report_progress(routed, archive_count, &name);
         let r = cmd(path.to_str().unwrap(), Some(tmp.to_str().unwrap()), true);
         if let Err(e) = r {
             eprintln!("extract fail {name}: {e}");
@@ -196,13 +219,18 @@ pub fn cmd_extract_roms(inbox: &str, roms_root: &str, keep: bool) -> Result<()> 
     }
 
     println!();
-    println!("== ExtractRoms summary ==");
-    println!("archives: {archive_count}");
-    println!("routed:   {routed}");
-    println!("unrouted: {unrouted}");
-    println!("errors:   {errors}");
-    println!("inbox:    {inbox}");
-    println!("roms:     {roms_root}");
+    println!("== ExtractRoms detail ==");
+    println!("archives processed: {archive_count}");
+    println!("files routed:       {routed}");
+    println!("files unrouted:     {unrouted}");
+    println!("errors:             {errors}");
+    println!("inbox:              {inbox}");
+    println!("roms root:          {roms_root}");
+    println!();
+    // Final SUMMARY line — activity.rs picks the last non-empty line as the activity summary.
+    println!(
+        "SUMMARY: {archive_count} archives, {routed} ROMs routed, {unrouted} unrouted, {errors} errors"
+    );
     if errors > 0 {
         return Err(anyhow!("{errors} errors during extraction"));
     }

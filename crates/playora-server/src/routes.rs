@@ -175,16 +175,59 @@ pub async fn events_batch(
                         ActivityStatus::Ok => "ok",
                         ActivityStatus::Fail => "fail",
                     };
-                    let _ = conn.execute(
-                        "INSERT INTO activities(device_id, script, status, started_at, ended_at, exit_code, log_path, summary, stdout_tail) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                        rusqlite::params![
-                            ev.device_id.0, a.script, status_str,
-                            a.started_at.to_rfc3339(),
-                            a.ended_at.map(|t| t.to_rfc3339()),
-                            a.exit_code, a.log_path,
-                            a.summary, a.stdout_tail,
-                        ],
-                    );
+                    // Upsert: if status=running and a recent (<10min) running row exists for
+                    // (device, script), UPDATE its summary instead of inserting a duplicate.
+                    let mut did_update = false;
+                    if matches!(a.status, ActivityStatus::Running) {
+                        let cutoff = (Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+                        let existing: Option<i64> = conn
+                            .query_row(
+                                "SELECT id FROM activities WHERE device_id=?1 AND script=?2 AND status='running' AND started_at >= ?3 ORDER BY id DESC LIMIT 1",
+                                rusqlite::params![ev.device_id.0, a.script, cutoff],
+                                |r| r.get(0),
+                            )
+                            .ok();
+                        if let Some(id) = existing {
+                            let _ = conn.execute(
+                                "UPDATE activities SET summary=COALESCE(?2, summary) WHERE id=?1",
+                                rusqlite::params![id, a.summary],
+                            );
+                            did_update = true;
+                        }
+                    } else {
+                        // status terminal (ok/fail) — close the most recent running row.
+                        let existing: Option<i64> = conn
+                            .query_row(
+                                "SELECT id FROM activities WHERE device_id=?1 AND script=?2 AND status='running' ORDER BY id DESC LIMIT 1",
+                                rusqlite::params![ev.device_id.0, a.script],
+                                |r| r.get(0),
+                            )
+                            .ok();
+                        if let Some(id) = existing {
+                            let _ = conn.execute(
+                                "UPDATE activities SET status=?2, ended_at=?3, exit_code=?4, log_path=?5, summary=COALESCE(?6, summary), stdout_tail=COALESCE(?7, stdout_tail) WHERE id=?1",
+                                rusqlite::params![
+                                    id, status_str,
+                                    a.ended_at.map(|t| t.to_rfc3339()),
+                                    a.exit_code, a.log_path,
+                                    a.summary, a.stdout_tail,
+                                ],
+                            );
+                            did_update = true;
+                        }
+                    }
+                    if !did_update {
+                        let _ = conn.execute(
+                            "INSERT INTO activities(device_id, script, status, started_at, ended_at, exit_code, log_path, summary, stdout_tail) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                            rusqlite::params![
+                                ev.device_id.0, a.script, status_str,
+                                a.started_at.to_rfc3339(),
+                                a.ended_at.map(|t| t.to_rfc3339()),
+                                a.exit_code, a.log_path,
+                                a.summary, a.stdout_tail,
+                            ],
+                        );
+                    }
                 } else if let EventPayload::RestoreProgress(p) = &ev.payload {
                     let _ = conn.execute(
                         "INSERT INTO restore_progress(device_id, bytes_done, bytes_total, files_done, current_path, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",

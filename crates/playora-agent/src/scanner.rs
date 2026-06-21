@@ -30,6 +30,7 @@ const SAVE_LIKE: &[&str] = &[
 pub fn cmd_scan(cfg: AgentConfig) -> Result<()> {
     let conn = crate::db::open(&crate::cfg::db_path())?;
     let mut count = 0u64;
+    let mut per_system: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
     for root in &cfg.rom_paths {
         let root = Path::new(root);
         if !root.is_dir() {
@@ -113,10 +114,26 @@ pub fn cmd_scan(cfg: AgentConfig) -> Result<()> {
                 };
                 crate::db::enqueue(&conn, &ev)?;
                 count += 1;
+                *per_system.entry(sys_name.clone()).or_default() += 1;
+                if count % 100 == 0 {
+                    println!("  progress: {count} files scanned ({sys_name})");
+                    let _ = crate::activity::progress(
+                        &cfg,
+                        "Scan ROMs",
+                        &format!("scanned {count} files (current: {sys_name})"),
+                    );
+                }
             }
         }
     }
-    println!("scanned {count} files");
+    println!();
+    println!(
+        "SUMMARY: scanned {count} files across {} systems",
+        per_system.len()
+    );
+    for (sys, n) in &per_system {
+        println!("  {sys:20} {n}");
+    }
     Ok(())
 }
 

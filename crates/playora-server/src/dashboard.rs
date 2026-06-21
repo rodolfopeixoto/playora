@@ -582,6 +582,89 @@ pub async fn device_page(
         sess_html.push_str("<tr><td colspan=4 class=\"empty\">No sessions yet.</td></tr>");
     }
 
+    // Per-device recent activity (last 20).
+    let mut act_html = String::new();
+    let mut stmt = conn.prepare("SELECT id, script, status, started_at, COALESCE(ended_at,''), COALESCE(exit_code,-1), COALESCE(summary,'') FROM activities WHERE device_id=?1 ORDER BY id DESC LIMIT 20").unwrap();
+    let rows = stmt
+        .query_map([id.clone()], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, String>(6)?,
+            ))
+        })
+        .unwrap();
+    for (aid, script, status, started, ended, code, summary) in rows.flatten() {
+        let pill_class = match status.as_str() {
+            "ok" => "pill ok",
+            "fail" => "pill err",
+            _ => "pill warn",
+        };
+        let when = if ended.is_empty() {
+            format!("started {}", relative_time(&started))
+        } else {
+            format!("finished {}", relative_time(&ended))
+        };
+        act_html.push_str(&format!(
+            "<tr><td><a href=\"/dashboard/activity/{aid}\">{}</a></td><td><span class=\"{}\">{}</span></td><td class=\"muted\">{}</td><td class=\"muted\">{}</td><td class=\"muted\">{}</td></tr>",
+            esc(&script), pill_class, esc(&status), esc(&summary), esc(&when),
+            if code >= 0 { format!("exit {code}") } else { String::new() }
+        ));
+    }
+    if act_html.is_empty() {
+        act_html.push_str(
+            "<tr><td colspan=5 class=\"empty\">No activity recorded for this device.</td></tr>",
+        );
+    }
+
+    // Per-device recent events (last 30, grouped by type).
+    let mut ev_html = String::new();
+    let mut stmt = conn.prepare("SELECT event_type, COUNT(*) as n, MAX(received_at) FROM events WHERE device_id=?1 GROUP BY event_type ORDER BY n DESC").unwrap();
+    let rows = stmt
+        .query_map([id.clone()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap();
+    for (typ, n, last) in rows.flatten() {
+        ev_html.push_str(&format!(
+            "<tr><td><span class=\"pill\">{}</span></td><td>{}</td><td class=\"muted\">{}</td></tr>",
+            esc(&typ), n, esc(&relative_time(&last))
+        ));
+    }
+    if ev_html.is_empty() {
+        ev_html.push_str("<tr><td colspan=3 class=\"empty\">No events yet.</td></tr>");
+    }
+
+    let events_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE device_id=?1",
+            [id.clone()],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let activities_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM activities WHERE device_id=?1",
+            [id.clone()],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let hw_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM hardware_snapshots WHERE device_id=?1",
+            [id.clone()],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
     let title = match dev.as_ref() {
         Some((_, name, profile, os, seen)) => format!(
             "<h1>{}</h1><p class=\"sub\"><span class=\"pill\">{}</span> · {} · last seen <code>{}</code></p><p><code>{}</code></p>",
@@ -596,16 +679,23 @@ pub async fn device_page(
     let html = format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><title>Device · Playora</title>
 <meta http-equiv="refresh" content="20">
-<style>{css}</style></head>
+<style>{css}.pill.ok{{background:#0f2818;color:#5fbf76}}.pill.warn{{background:#2a1f0a;color:#d4a648}}.pill.err{{background:#2a0f0f;color:#d65656}}</style></head>
 <body><div class="wrap">
 {hdr}
 {title}
 <div class="grid">
     <div class="card"><div class="l">Sessions</div><div class="v">{sess_count}</div></div>
     <div class="card"><div class="l">Total playtime</div><div class="v">{play}</div></div>
+    <div class="card"><div class="l">Activities</div><div class="v">{activities_count}</div></div>
+    <div class="card"><div class="l">Events</div><div class="v">{events_count}</div></div>
+    <div class="card"><div class="l">HW snapshots</div><div class="v">{hw_count}</div></div>
 </div>
+<h2>Recent activity</h2>
+<table><thead><tr><th>Script</th><th>Status</th><th>Summary</th><th>When</th><th></th></tr></thead><tbody>{act_html}</tbody></table>
 <h2>Hardware</h2>
 <table>{hw_html}</table>
+<h2>Events by type</h2>
+<table><thead><tr><th>Type</th><th>Count</th><th>Last received</th></tr></thead><tbody>{ev_html}</tbody></table>
 <h2>Top games</h2>
 <table><thead><tr><th>Game</th><th>System</th><th>Sessions</th><th>Total time</th></tr></thead><tbody>{games_html}</tbody></table>
 <h2>Recent sessions</h2>

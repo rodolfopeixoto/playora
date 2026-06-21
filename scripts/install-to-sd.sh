@@ -13,8 +13,8 @@ LOG_DIR="$SD/.playora/logs"
 INBOX_DIR="$SD/_inbox"
 mkdir -p "$PLAYORA_DIR" "$PORTS_DIR" "$LOG_DIR" "$INBOX_DIR"
 
-# Sweep leftover Playora *.sh (and .bak.*) from previous generators.
-find "$PORTS_DIR" -maxdepth 1 -type f -name "Playora *.sh*" -print -delete 2>/dev/null || true
+# Sweep leftover Playora *.sh and old splash PNGs so install is idempotent.
+find "$PORTS_DIR" -maxdepth 1 -type f \( -name "Playora *.sh*" -o -name "Playora *.png" \) -print -delete 2>/dev/null || true
 
 cp "$BIN" "$PLAYORA_DIR/playora-agent"
 chmod 0755 "$PLAYORA_DIR/playora-agent"
@@ -84,6 +84,33 @@ exit $END_RC
 RUNNER
 chmod 0755 "$PLAYORA_DIR/port-runner.sh"
 
+# Splash PNG generator: replaces the generic purple ES launch image with
+# an informative card so the user sees what's happening during launch.
+HAS_MAGICK=0
+if command -v magick >/dev/null 2>&1; then
+    HAS_MAGICK=1
+elif command -v convert >/dev/null 2>&1; then
+    HAS_MAGICK=2
+fi
+write_splash() {
+    name="$1"; cmd="$2"; timeout_s="$3"
+    out="$PORTS_DIR/Playora ${name}.png"
+    case $HAS_MAGICK in
+        1) MAGICK="magick" ;;
+        2) MAGICK="convert" ;;
+        *) return 0 ;;
+    esac
+    $MAGICK -size 640x480 \
+        gradient:'#0a0a14-#1a0a2e' \
+        -gravity North -fill '#7c9eff' -pointsize 18 -annotate +0+30 "PLAYORA" \
+        -gravity Center -fill '#ffffff' -pointsize 42 -annotate +0-30 "${name}" \
+        -gravity Center -fill '#9aa' -pointsize 16 -annotate +0+30 "command: ${cmd}" \
+        -gravity Center -fill '#666' -pointsize 13 -annotate +0+60 "timeout: ${timeout_s}s · runs in background" \
+        -gravity South -fill '#42a5f5' -pointsize 14 -annotate +0+40 "see hub for live status" \
+        -gravity South -fill '#555' -pointsize 11 -annotate +0+18 "192.168.3.82:8080/dashboard" \
+        "$out" 2>/dev/null && echo "[install] splash: $(basename "$out")"
+}
+
 # Generator: each port is a thin wrapper that backgrounds port-runner.sh
 # and exits within 1 second so EmulationStation never freezes.
 write_port() {
@@ -98,6 +125,7 @@ exit 0
 EOF
     chmod 0755 "$file"
     echo "[install] wrote ${file}"
+    write_splash "${name}" "${cmd}" "${timeout_s}"
 }
 
 # name | command | timeout-seconds (or "none" for no timeout)
@@ -152,6 +180,7 @@ exit 0
 EOF
 chmod 0755 "$PORTS_DIR/Playora Autosync Enable.sh"
 echo "[install] wrote $PORTS_DIR/Playora Autosync Enable.sh"
+write_splash "Autosync Enable" "systemd enable + start" "60"
 
 cat > "$PORTS_DIR/Playora Autosync Disable.sh" <<'EOF'
 #!/bin/sh
@@ -171,6 +200,7 @@ exit 0
 EOF
 chmod 0755 "$PORTS_DIR/Playora Autosync Disable.sh"
 echo "[install] wrote $PORTS_DIR/Playora Autosync Disable.sh"
+write_splash "Autosync Disable" "systemd disable + stop" "60"
 
 cat > "$PORTS_DIR/Playora Recover.sh" <<'EOF'
 #!/bin/sh
@@ -190,6 +220,7 @@ exit 0
 EOF
 chmod 0755 "$PORTS_DIR/Playora Recover.sh"
 echo "[install] wrote $PORTS_DIR/Playora Recover.sh"
+write_splash "Recover" "kill agent + restart ES" "30"
 
 CFG="$PLAYORA_DIR/agent.toml"
 if [ ! -f "$CFG" ]; then

@@ -20,6 +20,23 @@ pub fn begin(cfg: &AgentConfig, script: &str) -> Result<()> {
     )
 }
 
+/// Mid-run status update. Server upserts the still-running row by (device, script).
+pub fn progress(cfg: &AgentConfig, script: &str, summary: &str) -> Result<()> {
+    enqueue(
+        cfg,
+        Activity {
+            script: script.into(),
+            status: ActivityStatus::Running,
+            started_at: Utc::now(),
+            ended_at: None,
+            exit_code: None,
+            log_path: None,
+            summary: Some(summary.into()),
+            stdout_tail: None,
+        },
+    )
+}
+
 pub fn end(cfg: &AgentConfig, script: &str, exit_code: i32, log_path: Option<&str>) -> Result<()> {
     let (summary, tail) = match log_path {
         Some(p) => read_summary_and_tail(p, 40),
