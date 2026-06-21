@@ -125,6 +125,7 @@ write_port "Update"          "tui"  "self-update"
 write_port "Doctor"          "task" "doctor"
 write_port "Hardware"        "task" "hardware snapshot --save"
 write_port "Saves Backup"    "task" "saves upload"
+write_port "Kodi Setup"      "task" "kodi setup"
 
 CFG="$PLAYORA_DIR/agent.toml"
 if [ ! -f "$CFG" ]; then

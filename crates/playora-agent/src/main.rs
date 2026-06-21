@@ -7,6 +7,7 @@ mod db;
 mod download;
 mod features;
 mod hw;
+mod kodi;
 mod launcher;
 mod myrient;
 mod portmaster;
@@ -145,6 +146,17 @@ enum Cmd {
     },
     /// Show a log file in a scrollable TUI (use as: ports script post-step)
     ShowLog { file: String },
+    /// Kodi setup helper (list addons, recommend, install via JSON-RPC)
+    #[command(subcommand)]
+    Kodi(KodiCmd),
+}
+
+#[derive(Subcommand)]
+enum KodiCmd {
+    /// Probe Kodi, list installed video add-ons, print recommendations
+    Setup,
+    /// Trigger add-on install in Kodi (must be in enabled repository)
+    Install { addon_id: String },
 }
 
 #[derive(Subcommand)]
@@ -495,6 +507,10 @@ fn main() -> Result<()> {
         },
         Cmd::RestoreTar { keep_tar } => restore::cmd(keep_tar),
         Cmd::ShowLog { file } => showlog::cmd(std::path::Path::new(&file)),
+        Cmd::Kodi(c) => match c {
+            KodiCmd::Setup => kodi::cmd_setup(),
+            KodiCmd::Install { addon_id } => kodi::cmd_install(&addon_id),
+        },
     }
 }
 
