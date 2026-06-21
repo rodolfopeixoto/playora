@@ -163,8 +163,22 @@ enum Cmd {
     QuickSync,
     /// Mark a script as started (POSTs an Activity event to the server right away)
     ActivityBegin { script: String },
-    /// Mark a script as finished, with exit code
-    ActivityEnd { script: String, exit_code: i32 },
+    /// Mark a script as finished, with exit code (and optional log to ship last 40 lines)
+    ActivityEnd {
+        script: String,
+        exit_code: i32,
+        #[arg(long)]
+        log: Option<String>,
+    },
+    /// Extract all archives in /roms/_inbox into the proper system folder (auto-routes by extension)
+    ExtractRoms {
+        #[arg(long, default_value = "/roms/_inbox")]
+        inbox: String,
+        #[arg(long, default_value = "/roms")]
+        roms_root: String,
+        #[arg(long)]
+        keep: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -454,11 +468,16 @@ fn main() -> Result<()> {
             SavesCmd::Pack { dest } => saves::cmd_pack(load_cfg(cli.config.as_deref())?, dest),
             SavesCmd::Upload => saves::cmd_upload(load_cfg(cli.config.as_deref())?),
         },
-        Cmd::SelfUpdate { owner, repo } => {
-            let s = selfupdate::run(&owner, &repo)?;
-            println!("{s}");
-            Ok(())
-        }
+        Cmd::SelfUpdate { owner, repo } => match selfupdate::run(&owner, &repo) {
+            Ok(s) => {
+                println!("{s}");
+                Ok(())
+            }
+            Err(e) => {
+                println!("self-update skipped: {e}");
+                Ok(())
+            }
+        },
         Cmd::Portmaster(c) => match c {
             PortmasterCmd::List { ready_to_run_only } => {
                 let cat = portmaster::fetch_catalog()?;
@@ -540,10 +559,19 @@ fn main() -> Result<()> {
             let cfg = load_cfg(cli.config.as_deref())?;
             activity::begin(&cfg, &script)
         }
-        Cmd::ActivityEnd { script, exit_code } => {
+        Cmd::ActivityEnd {
+            script,
+            exit_code,
+            log,
+        } => {
             let cfg = load_cfg(cli.config.as_deref())?;
-            activity::end(&cfg, &script, exit_code)
+            activity::end(&cfg, &script, exit_code, log.as_deref())
         }
+        Cmd::ExtractRoms {
+            inbox,
+            roms_root,
+            keep,
+        } => extract::cmd_extract_roms(&inbox, &roms_root, keep),
     }
 }
 

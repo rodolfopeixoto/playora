@@ -13,18 +13,38 @@ pub fn cmd_status(cfg: AgentConfig) -> Result<()> {
             |r| r.get(0),
         )
         .ok();
+    let svc = std::process::Command::new("systemctl")
+        .args(["is-active", "playora-agent.service"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| "unknown".into());
+    let pids = std::process::Command::new("pgrep")
+        .args(["-f", "playora-agent.*run"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    println!("== Playora Status ==");
+    println!("device_id:        {}", cfg.device_id.0);
+    println!("device_name:      {}", cfg.device_name);
+    println!("server_url:       {}", cfg.server_url);
+    println!("agent_version:    {}", crate::AGENT_VERSION);
+    println!("pending_events:   {pending}");
     println!(
-        "{}",
-        serde_json::to_string_pretty(&serde_json::json!({
-            "device_id": cfg.device_id.0,
-            "device_name": cfg.device_name,
-            "server_url": cfg.server_url,
-            "pending_events": pending,
-            "last_sync_at": last_sync,
-            "agent_version": crate::AGENT_VERSION,
-            "now": Utc::now(),
-        }))?
+        "last_sync_at:     {}",
+        last_sync.unwrap_or_else(|| "(never)".into())
     );
+    println!("autosync_service: {svc}");
+    println!(
+        "running_pids:     {}",
+        if pids.is_empty() {
+            "(none)".into()
+        } else {
+            pids
+        }
+    );
+    println!("now:              {}", Utc::now());
     Ok(())
 }
 

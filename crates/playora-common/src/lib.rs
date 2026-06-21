@@ -327,6 +327,10 @@ pub struct Activity {
     pub ended_at: Option<DateTime<Utc>>,
     pub exit_code: Option<i32>,
     pub log_path: Option<String>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub stdout_tail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

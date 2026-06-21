@@ -4,6 +4,22 @@ use std::time::Duration;
 
 const DEFAULT_URL: &str = "http://localhost:8080/jsonrpc";
 
+/// Curated set of legal, official-repo addons we always try to enable.
+/// Format: (addon_id, human_name, group)
+const RECOMMENDED: &[(&str, &str, &str)] = &[
+    ("plugin.video.youtube", "YouTube", "video"),
+    ("plugin.video.tubitv", "Tubi", "video"),
+    ("plugin.video.jellyfin", "Jellyfin", "video"),
+    ("pvr.iptvsimple", "IPTV Simple Client (PVR)", "pvr"),
+    ("pvr.hts", "Tvheadend HTSP (PVR)", "pvr"),
+    (
+        "plugin.program.iagl",
+        "Internet Archive Game Launcher",
+        "game",
+    ),
+    ("plugin.video.plutotv", "Pluto TV", "video"),
+];
+
 pub struct KodiClient {
     url: String,
     http: reqwest::blocking::Client,
@@ -41,61 +57,119 @@ impl KodiClient {
     }
 
     pub fn install_addon(&self, addon_id: &str) -> Result<()> {
-        self.call("Addons.ExecuteAddon", json!({"addonid": addon_id}))
-            .map(|_| ())
+        // Trigger Kodi's built-in InstallAddon — pulls from enabled repos.
+        self.call(
+            "Addons.ExecuteAddon",
+            json!({"addonid": addon_id, "wait": false}),
+        )
+        .or_else(|_| {
+            self.call(
+                "Input.ExecuteAction",
+                json!({"action": format!("RunPlugin(plugin://{})", addon_id)}),
+            )
+        })
+        .map(|_| ())
+    }
+
+    pub fn enable_addon(&self, addon_id: &str) -> Result<()> {
+        self.call(
+            "Addons.SetAddonEnabled",
+            json!({"addonid": addon_id, "enabled": true}),
+        )
+        .map(|_| ())
+    }
+
+    pub fn addon_details(&self, addon_id: &str) -> Result<serde_json::Value> {
+        self.call(
+            "Addons.GetAddonDetails",
+            json!({"addonid": addon_id, "properties": ["name", "enabled", "installed"]}),
+        )
     }
 
     pub fn list_addons(&self, kind: &str) -> Result<serde_json::Value> {
         self.call(
             "Addons.GetAddons",
-            json!({"type": kind, "enabled": "all", "properties": ["name", "version", "summary"]}),
+            json!({"type": kind, "enabled": "all", "properties": ["name", "version", "summary", "enabled"]}),
         )
     }
 }
 
 pub fn cmd_setup() -> Result<()> {
     println!("Playora — Kodi Setup");
-    println!("(make sure Kodi is running and Settings → Services → Allow remote control via HTTP is ON, port 8080)");
+    println!("(Kodi: Settings → Services → Allow remote control via HTTP must be ON, port 8080)");
     println!();
 
     let client = KodiClient::new(None);
-    println!("Ping Kodi...");
+    println!("ping kodi...");
     let p = client
         .ping()
         .context("Kodi not reachable. Open Kodi first, enable Web server in Services.")?;
     println!("  -> {p}");
-
     println!();
-    println!("Installed video add-ons:");
-    let v = client
-        .list_addons("xbmc.addon.video")
-        .unwrap_or_else(|_| json!({"addons":[]}));
-    if let Some(arr) = v.get("addons").and_then(|x| x.as_array()) {
-        for a in arr {
-            let name = a.get("name").and_then(|x| x.as_str()).unwrap_or("?");
-            let id = a.get("addonid").and_then(|x| x.as_str()).unwrap_or("?");
-            let enabled = a.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false);
-            println!("  [{}] {} ({})", if enabled { "x" } else { " " }, name, id);
+
+    let mut enabled = 0;
+    let mut missing = Vec::new();
+    let mut already = 0;
+    for (id, name, group) in RECOMMENDED {
+        match client.addon_details(id) {
+            Ok(v) => {
+                let is_enabled = v
+                    .get("addon")
+                    .and_then(|a| a.get("enabled"))
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
+                if is_enabled {
+                    println!("  [x] {name:30} ({id}) [{group}] already enabled");
+                    already += 1;
+                    continue;
+                }
+                match client.enable_addon(id) {
+                    Ok(_) => {
+                        println!("  [+] {name:30} ({id}) [{group}] ENABLED");
+                        enabled += 1;
+                    }
+                    Err(e) => {
+                        println!("  [!] {name:30} ({id}) [{group}] enable failed: {e}");
+                        missing.push((id, name, group));
+                    }
+                }
+            }
+            Err(_) => {
+                // Not installed locally. Try kodi's installer.
+                match client.install_addon(id) {
+                    Ok(_) => println!("  [↓] {name:30} ({id}) [{group}] install triggered"),
+                    Err(_) => {
+                        println!("  [?] {name:30} ({id}) [{group}] not installed");
+                        missing.push((id, name, group));
+                    }
+                }
+            }
         }
     }
 
     println!();
-    println!("Recommended legal add-ons:");
-    println!("  plugin.video.youtube         — YouTube");
-    println!("  plugin.video.plutotv         — Pluto TV (free live TV)");
-    println!("  plugin.video.tubitv          — Tubi");
-    println!("  plugin.video.jellyfin        — Jellyfin (self-hosted media)");
-    println!("  pvr.iptvsimple               — IPTV (point at your M3U)");
-    println!();
-    println!("To install an add-on now, run: playora-agent kodi install <addon-id>");
-    println!("Note: add-ons must exist in Kodi's enabled repository. Default repo covers YouTube, Plex, Jellyfin.");
+    println!("== Kodi setup summary ==");
+    println!("enabled now:       {enabled}");
+    println!("already enabled:   {already}");
+    println!("missing/unreachable:{}", missing.len());
+    if !missing.is_empty() {
+        println!();
+        println!("To install missing addons, open Kodi:");
+        println!("  Settings → Add-ons → Install from repository → Kodi Add-on repository");
+        for (id, name, group) in &missing {
+            println!("  - {name} ({id}) [{group}]");
+        }
+    }
     Ok(())
 }
 
 pub fn cmd_install(addon_id: &str) -> Result<()> {
     let client = KodiClient::new(None);
+    if client.enable_addon(addon_id).is_ok() {
+        println!("enabled {addon_id}");
+        return Ok(());
+    }
     client.install_addon(addon_id)?;
     println!("triggered install for {addon_id}");
-    println!("Open Kodi to complete confirmation prompts if any.");
     Ok(())
 }

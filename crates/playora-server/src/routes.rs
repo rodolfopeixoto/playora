@@ -176,12 +176,13 @@ pub async fn events_batch(
                         ActivityStatus::Fail => "fail",
                     };
                     let _ = conn.execute(
-                        "INSERT INTO activities(device_id, script, status, started_at, ended_at, exit_code, log_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        "INSERT INTO activities(device_id, script, status, started_at, ended_at, exit_code, log_path, summary, stdout_tail) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                         rusqlite::params![
                             ev.device_id.0, a.script, status_str,
                             a.started_at.to_rfc3339(),
                             a.ended_at.map(|t| t.to_rfc3339()),
                             a.exit_code, a.log_path,
+                            a.summary, a.stdout_tail,
                         ],
                     );
                 } else if let EventPayload::RestoreProgress(p) = &ev.payload {
@@ -366,20 +367,46 @@ pub async fn ranking_playtime(AxState(state): AxState<State>) -> Json<Vec<Value>
 
 pub async fn activities_recent(AxState(state): AxState<State>) -> Json<Vec<Value>> {
     let conn = state.lock().await;
-    let mut stmt = conn.prepare("SELECT device_id, script, status, started_at, COALESCE(ended_at,''), COALESCE(exit_code, -1) FROM activities ORDER BY id DESC LIMIT 50").unwrap();
+    let mut stmt = conn.prepare("SELECT id, device_id, script, status, started_at, COALESCE(ended_at,''), COALESCE(exit_code, -1), COALESCE(summary,''), COALESCE(stdout_tail,'') FROM activities ORDER BY id DESC LIMIT 50").unwrap();
     let rows = stmt
         .query_map([], |r| {
             Ok(serde_json::json!({
-                "device_id": r.get::<_,String>(0)?,
-                "script":    r.get::<_,String>(1)?,
-                "status":    r.get::<_,String>(2)?,
-                "started_at":r.get::<_,String>(3)?,
-                "ended_at":  r.get::<_,String>(4)?,
-                "exit_code": r.get::<_,i64>(5)?,
+                "id":         r.get::<_,i64>(0)?,
+                "device_id":  r.get::<_,String>(1)?,
+                "script":     r.get::<_,String>(2)?,
+                "status":     r.get::<_,String>(3)?,
+                "started_at": r.get::<_,String>(4)?,
+                "ended_at":   r.get::<_,String>(5)?,
+                "exit_code":  r.get::<_,i64>(6)?,
+                "summary":    r.get::<_,String>(7)?,
+                "stdout_tail":r.get::<_,String>(8)?,
             }))
         })
         .unwrap();
     Json(rows.flatten().collect())
+}
+
+pub async fn activity_get(
+    AxState(state): AxState<State>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Json<Value> {
+    let conn = state.lock().await;
+    let v: Option<Value> = conn.query_row(
+        "SELECT id, device_id, script, status, started_at, COALESCE(ended_at,''), COALESCE(exit_code,-1), COALESCE(log_path,''), COALESCE(summary,''), COALESCE(stdout_tail,'') FROM activities WHERE id=?1",
+        [id], |r| Ok(serde_json::json!({
+            "id":          r.get::<_,i64>(0)?,
+            "device_id":   r.get::<_,String>(1)?,
+            "script":      r.get::<_,String>(2)?,
+            "status":      r.get::<_,String>(3)?,
+            "started_at":  r.get::<_,String>(4)?,
+            "ended_at":    r.get::<_,String>(5)?,
+            "exit_code":   r.get::<_,i64>(6)?,
+            "log_path":    r.get::<_,String>(7)?,
+            "summary":     r.get::<_,String>(8)?,
+            "stdout_tail": r.get::<_,String>(9)?,
+        }))
+    ).ok();
+    Json(v.unwrap_or_else(|| serde_json::json!({"error":"not_found"})))
 }
 
 pub async fn restore_progress_latest(AxState(state): AxState<State>) -> Json<Value> {

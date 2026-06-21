@@ -12,6 +12,11 @@ pub fn open(path: &str) -> Result<Connection> {
         c.execute_batch(p)?;
     }
     c.execute_batch(SCHEMA)?;
+    // Best-effort migrations for columns added after initial release.
+    let _ = c.execute_batch(
+        "ALTER TABLE activities ADD COLUMN summary TEXT;\
+         ALTER TABLE activities ADD COLUMN stdout_tail TEXT;",
+    );
     seed_catalog(&c)?;
     Ok(c)
 }
@@ -117,9 +122,12 @@ CREATE TABLE IF NOT EXISTS activities (
     started_at TEXT,
     ended_at TEXT,
     exit_code INTEGER,
-    log_path TEXT
+    log_path TEXT,
+    summary TEXT,
+    stdout_tail TEXT
 );
 CREATE INDEX IF NOT EXISTS activities_device_idx ON activities(device_id);
+CREATE INDEX IF NOT EXISTS activities_started_idx ON activities(started_at);
 CREATE TABLE IF NOT EXISTS restore_progress (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id TEXT,
