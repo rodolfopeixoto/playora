@@ -61,18 +61,86 @@ pub fn extract(tar_path: &Path, dest: &Path, keep_tar: bool) -> Result<RestoreRe
 }
 
 pub fn cmd(keep_tar: bool) -> Result<()> {
+    let _lock = crate::lockfile::acquire("restore-tar")?;
     let cfg = crate::cfg::load(None).ok();
     let tar = find_tarball()
         .ok_or_else(|| anyhow!("playora_restore.tar not found in /roms/ or /roms/.playora/"))?;
     let total = std::fs::metadata(&tar)?.len();
-    println!("found tar: {} ({} bytes)", tar.display(), total);
     let dest = PathBuf::from("/roms");
-    println!("extracting into {}...", dest.display());
+    println!("== Restore Backup ==");
+    println!("tar:  {} ({} MB)", tar.display(), total / 1024 / 1024);
+    println!("dest: {}", dest.display());
 
-    // Spawn tar with verbose output so we can count progress.
+    // Free-disk preflight.
+    if let Some((_total_bytes, free_bytes)) = statvfs_bytes(&dest) {
+        let needed = total + 1024 * 1024 * 1024; // 1 GB margin
+        println!(
+            "free: {} MB (need at least {} MB)",
+            free_bytes / 1024 / 1024,
+            needed / 1024 / 1024
+        );
+        if free_bytes < total {
+            return Err(anyhow!(
+                "not enough free space: {} MB free, {} MB tar — clear /roms first",
+                free_bytes / 1024 / 1024,
+                total / 1024 / 1024
+            ));
+        }
+    }
+
+    // Pre-walk the tar listing to count entries + detect already-present
+    // files. Comparing only by path existence + size — close enough for
+    // ROM packs (immutable content).
+    println!();
+    println!("inspecting tar contents...");
+    let listing_out = Command::new("tar")
+        .arg("-tvf")
+        .arg(&tar)
+        .output()
+        .with_context(|| "spawn tar -tvf")?;
+    if !listing_out.status.success() {
+        return Err(anyhow!("tar -tvf failed"));
+    }
+    let listing = String::from_utf8_lossy(&listing_out.stdout);
+    let mut tar_files: Vec<(String, u64)> = Vec::new();
+    for line in listing.lines() {
+        // typical: "-rw-r--r-- root/root 12345 2024-01-01 12:00 path/to/file"
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 6 || !line.starts_with('-') {
+            continue; // skip directories + non-file entries
+        }
+        let size: u64 = parts[2].parse().unwrap_or(0);
+        let path = parts[5..].join(" ");
+        tar_files.push((path, size));
+    }
+    let total_entries = tar_files.len();
+    let mut already_present = 0usize;
+    for (path, size) in &tar_files {
+        let on_disk = dest.join(path);
+        if let Ok(md) = std::fs::metadata(&on_disk) {
+            if md.len() == *size {
+                already_present += 1;
+            }
+        }
+    }
+    let to_extract = total_entries - already_present;
+    println!("tar contains:   {total_entries} files");
+    println!("already in dest: {already_present}");
+    println!("to extract:      {to_extract}");
+
+    if to_extract == 0 {
+        println!();
+        println!("SUMMARY: nothing to do — all {total_entries} files already present.");
+        return Ok(());
+    }
+
+    // Idempotent extract: --skip-old-files skips files that already exist.
+    println!();
+    println!("extracting (skipping existing files)...");
     let mut child = Command::new("tar")
         .arg("-xvpf")
         .arg(&tar)
+        .arg("--skip-old-files")
         .arg("-C")
         .arg(&dest)
         .stdout(std::process::Stdio::piped())
@@ -89,42 +157,73 @@ pub fn cmd(keep_tar: bool) -> Result<()> {
         let reader = BufReader::new(stdout);
         let mut files: u64 = 0;
         let mut last_report = std::time::Instant::now();
-        let mut current = String::new();
         for line in reader.lines().map_while(|r| r.ok()) {
             files += 1;
-            current = line;
             if last_report.elapsed().as_secs() >= 3 {
                 last_report = std::time::Instant::now();
                 let bytes_done = dir_size(&dest_clone).unwrap_or(0);
                 if let Some(c) = cfg_clone.as_ref() {
-                    let _ = emit_progress(
-                        c,
-                        bytes_done,
-                        total_for_thread,
-                        files,
-                        Some(current.clone()),
-                    );
+                    let _ =
+                        emit_progress(c, bytes_done, total_for_thread, files, Some(line.clone()));
                 }
+                println!("  extracted {files} files (current: {line})");
             }
         }
-        if let Some(c) = cfg_clone.as_ref() {
-            let bytes_done = dir_size(&dest_clone).unwrap_or(total_for_thread);
-            let _ = emit_progress(c, bytes_done, total_for_thread, files, None);
-        }
+        files
     });
 
     let status = child.wait().with_context(|| "wait tar")?;
-    let _ = progress_thread.join();
-    if !status.success() {
-        return Err(anyhow!("tar exited with {:?}", status.code()));
+    let files_extracted = progress_thread.join().unwrap_or(0);
+    let rc = status.code().unwrap_or(-1);
+
+    if rc == 143 || rc == 137 {
+        println!();
+        println!("RESUMABLE: tar killed mid-extract (signal {rc}).");
+        println!("Run again — already-extracted files will be skipped.");
+        println!(
+            "SUMMARY: {files_extracted} files written before interruption, {} remaining",
+            to_extract as i64 - files_extracted as i64
+        );
+        return Err(anyhow!("interrupted (signal {rc}) — re-run to resume"));
     }
+    if !status.success() {
+        return Err(anyhow!("tar exited with {:?}", rc));
+    }
+
     let deleted = if keep_tar {
         false
     } else {
         std::fs::remove_file(&tar).is_ok()
     };
-    println!("done. tar deleted: {deleted}");
+    println!();
+    println!(
+        "SUMMARY: {files_extracted} files extracted (of {to_extract} new, {already_present} already present), tar deleted: {deleted}"
+    );
     Ok(())
+}
+
+fn statvfs_bytes(path: &std::path::Path) -> Option<(u64, u64)> {
+    use std::ffi::CString;
+    let p = path.to_string_lossy().to_string();
+    let cstr = CString::new(p).ok()?;
+    #[cfg(target_os = "linux")]
+    {
+        let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+        let rc = unsafe { libc::statvfs(cstr.as_ptr(), &mut s) };
+        if rc != 0 {
+            return None;
+        }
+        Some((
+            s.f_blocks as u64 * s.f_frsize as u64,
+            s.f_bavail as u64 * s.f_frsize as u64,
+        ))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Dev host fallback — assume plenty of space.
+        let _ = cstr;
+        Some((u64::MAX, u64::MAX))
+    }
 }
 
 fn emit_progress(

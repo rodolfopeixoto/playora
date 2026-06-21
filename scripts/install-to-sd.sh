@@ -44,12 +44,16 @@ if [ -f "$RCLONE_CACHE" ]; then
     echo "[install] rclone -> $PLAYORA_DIR/bin/rclone"
 fi
 
-# Shared helper: never touches any tty/framebuffer (ES owns /dev/tty1).
-# All status goes to log file + dashboard via activity-end.
+# Dual-mode port runner. Two modes:
+#   tty: claim /dev/tty1, run command in foreground with colored output the
+#        user can read on the R36S screen. ES is paused while a Port script
+#        runs, so taking tty1 is safe. We restart ES on exit.
+#   bg:  detached background (the legacy pattern) — fire-and-forget.
 cat > "$PLAYORA_DIR/port-runner.sh" <<'RUNNER'
 #!/bin/sh
-# Args: NAME CMD [TIMEOUT_SECONDS]
-# Runs in a detached session — no controlling terminal, no fd inherits.
+# Args: MODE NAME CMD [TIMEOUT_SECONDS]
+#   MODE = tty | bg
+MODE="$1"; shift
 NAME="$1"; shift
 CMD="$1"; shift
 TIMEOUT="${1:-30}"
@@ -58,26 +62,53 @@ SAFE="$(echo "$NAME" | tr ' /' '__')"
 LOG="/roms/.playora/logs/${SAFE}_$(date +%Y%m%d_%H%M%S).log"
 mkdir -p /roms/.playora/logs
 AGENT="/roms/.playora/playora-agent --config /roms/.playora/agent.toml"
+ESUDO="sudo"
+[ "$EUID" = "0" ] && ESUDO=""
 
-# Drop ALL inherited fds — never share stdin/stdout/stderr with ES.
-exec </dev/null
-exec >>"$LOG"
-exec 2>&1
+if [ "$MODE" = "tty" ]; then
+    # Claim the framebuffer console.
+    export TERM=linux
+    $ESUDO chmod 666 /dev/tty1 /dev/uinput 2>/dev/null || true
+    printf '\033c' > /dev/tty1
+    exec </dev/tty1 >/dev/tty1 2>&1
+else
+    # Detach completely so ES keeps tty1 clean.
+    exec </dev/null >>"$LOG" 2>&1
+fi
 
 log() {
-    echo "[$(date +%H:%M:%S)] $*"
+    if [ "$MODE" = "tty" ]; then
+        printf '\033[2m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"
+        echo "[$(date +%H:%M:%S)] $*" >> "$LOG"
+    else
+        echo "[$(date +%H:%M:%S)] $*"
+    fi
 }
 
-# Trap guarantees activity-end fires even on timeout/kill.
+# Restart EmulationStation at the end so the framebuffer is clean.
+restart_es() {
+    if [ "$MODE" = "tty" ]; then
+        $ESUDO systemctl restart emulationstation 2>/dev/null \
+            || $ESUDO systemctl restart emustation 2>/dev/null \
+            || true
+    fi
+}
+
 END_RC=1
 trap '
     RC=$END_RC
     log "exit $RC"
     $AGENT activity-end "$NAME" "$RC" --log "$LOG" >/dev/null 2>&1 || true
     $AGENT sync >/dev/null 2>&1 || true
+    restart_es
 ' EXIT INT TERM
 
-log "===== $NAME ====="
+if [ "$MODE" = "tty" ]; then
+    printf '\033[1;35m╔══════════════════════════════════════════════════════╗\n'
+    printf '║  \033[1;37mPLAYORA · %-43s\033[1;35m║\n' "$NAME"
+    printf '╚══════════════════════════════════════════════════════╝\033[0m\n\n'
+fi
+
 log "starting at $(date)"
 log "command: $CMD"
 log "timeout: ${TIMEOUT}s"
@@ -94,19 +125,24 @@ else
     IONICE=""
 fi
 if [ "$TIMEOUT" = "none" ]; then
-    $NICE $IONICE $AGENT $CMD
-    END_RC=$?
+    $NICE $IONICE $AGENT $CMD 2>&1 | tee -a "$LOG"
+    END_RC=${PIPESTATUS:-$?}
 else
-    timeout "$TIMEOUT" $NICE $IONICE $AGENT $CMD
-    END_RC=$?
+    timeout "$TIMEOUT" $NICE $IONICE $AGENT $CMD 2>&1 | tee -a "$LOG"
+    END_RC=${PIPESTATUS:-$?}
 fi
 
 if [ "$END_RC" = "0" ]; then
-    log "> ok"
+    printf '\n\033[1;32m  ✓ DONE  \033[0m exit 0\n'
 else
-    log "> FAILED (exit $END_RC)"
+    printf '\n\033[1;31m  ✗ FAIL  \033[0m exit %s\n' "$END_RC"
 fi
 log "> syncing to dashboard..."
+
+if [ "$MODE" = "tty" ]; then
+    printf '\n\033[2m  Returning to EmulationStation in 5s...\033[0m\n'
+    sleep 5
+fi
 exit $END_RC
 RUNNER
 chmod 0755 "$PLAYORA_DIR/port-runner.sh"
@@ -138,50 +174,56 @@ write_splash() {
         "$out" 2>/dev/null && echo "[install] splash: $(basename "$out")"
 }
 
-# Generator: each port is a thin wrapper that backgrounds port-runner.sh
-# and exits within 1 second so EmulationStation never freezes.
+# Generator: per-port wrapper. mode=tty means the script claims /dev/tty1
+# and shows colored output to the user; mode=bg detaches silently.
 write_port() {
-    name="$1"; cmd="$2"; timeout_s="${3:-30}"
+    name="$1"; cmd="$2"; timeout_s="${3:-30}"; mode="${4:-tty}"
     file="$PORTS_DIR/Playora ${name}.sh"
-    # setsid fully detaches child from the controlling tty so ES keeps clean
-    # ownership of /dev/tty1. nohup ignores HUP. All fds redirected to /dev/null
-    # so child never inherits ES's stdout/stderr.
-    cat > "$file" <<EOF
+    if [ "$mode" = "tty" ]; then
+        # Foreground: port-runner takes the tty + restarts ES on exit.
+        cat > "$file" <<EOF
+#!/bin/sh
+exec /roms/.playora/port-runner.sh tty "${name}" "${cmd}" "${timeout_s}"
+EOF
+    else
+        # Background: fire-and-forget so ES returns immediately.
+        cat > "$file" <<EOF
 #!/bin/sh
 SETSID=\$(command -v setsid 2>/dev/null)
 if [ -n "\$SETSID" ]; then
-    \$SETSID nohup /roms/.playora/port-runner.sh "${name}" "${cmd}" "${timeout_s}" </dev/null >/dev/null 2>&1 &
+    \$SETSID nohup /roms/.playora/port-runner.sh bg "${name}" "${cmd}" "${timeout_s}" </dev/null >/dev/null 2>&1 &
 else
-    nohup /roms/.playora/port-runner.sh "${name}" "${cmd}" "${timeout_s}" </dev/null >/dev/null 2>&1 &
+    nohup /roms/.playora/port-runner.sh bg "${name}" "${cmd}" "${timeout_s}" </dev/null >/dev/null 2>&1 &
 fi
 sleep 1
 exit 0
 EOF
+    fi
     chmod 0755 "$file"
-    echo "[install] wrote ${file}"
+    echo "[install] wrote ${file} (mode=${mode})"
     write_splash "${name}" "${cmd}" "${timeout_s}"
 }
 
 # name | command | timeout-seconds (or "none" for no timeout)
-write_port "Doctor"          "doctor"                   30
-write_port "Hardware"        "hardware snapshot --save" 30
-write_port "Quick Sync"      "quick-sync"               45
-write_port "Heartbeat"       "heartbeat"                10
-write_port "Saves Backup"    "saves upload"             120
-write_port "Restore Backup"  "restore-tar"              none
-write_port "Update"          "self-update"              180
-write_port "Kodi Setup"      "kodi setup"               60
-write_port "Scan ROMs"       "scan"                     300
-write_port "Extract ROMs"    "extract-roms"             600
-write_port "Compress ROMs"   "compress-roms"            1800
-write_port "Cloud Setup"     "cloud setup"              600
-write_port "Cloud Backup"    "cloud backup"             1200
-write_port "Cloud Restore"   "cloud restore"            1200
-write_port "Cloud Status"    "cloud status"             10
-write_port "Cleanup"         "cleanup"                  120
+# tty mode → user sees colored output on the R36S screen
+# bg  mode → fire-and-forget background job, dashboard tracks
+write_port "Quick Sync"      "quick-sync"               45    bg
+write_port "Doctor"          "doctor"                   30    tty
+write_port "Hardware"        "hardware snapshot --pretty --save" 30 tty
+write_port "Scan ROMs"       "scan"                     300   tty
+write_port "Extract ROMs"    "extract-roms"             600   tty
+write_port "Compress ROMs"   "compress-roms"            1800  tty
+write_port "Restore Backup"  "restore-tar"              none  tty
+write_port "Cleanup"         "cleanup"                  120   tty
+write_port "Cloud Setup"     "cloud setup"              600   tty
+write_port "Cloud Backup"    "cloud backup"             1200  bg
+write_port "Cloud Restore"   "cloud restore"            1200  bg
+write_port "Cloud Status"    "cloud status"             10    tty
+write_port "Kodi Setup"      "kodi setup"               60    tty
+write_port "Update"          "self-update"              180   tty
 
 # Autosync triple: Status / Enable / Disable
-write_port "Autosync Status" "status"                   10
+write_port "Autosync Status" "status"                   10    tty
 
 cat > "$PORTS_DIR/Playora Autosync Enable.sh" <<'EOF'
 #!/bin/sh
@@ -353,28 +395,110 @@ each ROM into /roms/<system>/. Originals are removed once extraction is OK.
 Reload the EmulationStation game list afterwards to see the new ROMs.
 EOF
 
-# Write gamelist.xml so EmulationStation uses our PNG splash + description per Port.
-GAMELIST="$PORTS_DIR/gamelist.xml"
-echo '<?xml version="1.0"?>' > "$GAMELIST"
-echo '<gameList>' >> "$GAMELIST"
-for sh in "$PORTS_DIR"/Playora\ *.sh; do
-    [ -f "$sh" ] || continue
-    base="$(basename "$sh")"
-    name_only="$(basename "$sh" .sh)"
-    short="${name_only#Playora }"
-    png="./${name_only}.png"
-    cat >> "$GAMELIST" <<XML
+# Per-command human-readable description shown in the Ports + Playora menus.
+desc_for() {
+    case "$1" in
+        "Doctor") echo "Health check: storage, server, tools, RetroArch, autosync — full report on screen.";;
+        "Hardware") echo "Show CPU/RAM/kernel/panel/disk/WiFi on screen and sync the snapshot to the dashboard.";;
+        "Quick Sync") echo "Background: diagnostic + hardware snapshot + sync. Quick way to push state to the hub.";;
+        "Scan ROMs") echo "Index every ROM in /roms. Incremental: re-runs skip files that haven't changed.";;
+        "Extract ROMs") echo "Extract every archive in /roms/_inbox and route ROMs into /roms/<system>/ by file extension.";;
+        "Compress ROMs") echo "Convert PSX/Saturn/Dreamcast/PSP/Wii images to CHD/CSO/RVZ. Smaller + RetroArch-native.";;
+        "Restore Backup") echo "Extract /roms/playora_restore.tar idempotently — skips files already present.";;
+        "Cleanup") echo "Apply pending deletions: /roms/.playora/delete_queue.txt + the dashboard delete queue.";;
+        "Cloud Setup") echo "Pair Google Drive via QR. Scan the QR with your phone to open the dashboard setup page.";;
+        "Cloud Backup") echo "Background: sync /roms/savestates and /roms/.playora to gdrive:R36S. Long-running.";;
+        "Cloud Restore") echo "Background: pull savestates + config from gdrive:R36S back to the SD.";;
+        "Cloud Status") echo "Print rclone version + configured remotes.";;
+        "Kodi Setup") echo "Enable curated Kodi addons (YouTube, Jellyfin, IPTV Simple, IAGL) via JSON-RPC.";;
+        "Update") echo "Self-update the agent from the GitHub release.";;
+        "Autosync Status") echo "Show the autosync service status, pending events, and last sync time.";;
+        "Autosync Enable") echo "Install + start the autosync systemd service so events sync continuously.";;
+        "Autosync Disable") echo "Stop + disable the autosync service.";;
+        "Recover") echo "Emergency: kill agent processes, clear locks, restart EmulationStation.";;
+        *) echo "Playora command: $1.";;
+    esac
+}
+
+write_gamelist() {
+    local out_dir="$1"
+    local gl="${out_dir}/gamelist.xml"
+    echo '<?xml version="1.0"?>' > "$gl"
+    echo '<gameList>' >> "$gl"
+    for sh in "${out_dir}"/Playora\ *.sh; do
+        [ -f "$sh" ] || continue
+        base="$(basename "$sh")"
+        name_only="$(basename "$sh" .sh)"
+        short="${name_only#Playora }"
+        png="./${name_only}.png"
+        desc="$(desc_for "$short")"
+        cat >> "$gl" <<XML
   <game>
     <path>./${base}</path>
     <name>Playora · ${short}</name>
-    <desc>Background task. Runs the playora-agent ${short} command. Watch live status + log tail on the dashboard at ${PLAYORA_SERVER_URL:-http://192.168.3.82:8080}/dashboard — every click shows up there within seconds. EmulationStation returns immediately; never wait on a black screen.</desc>
+    <desc>${desc}</desc>
     <image>${png}</image>
     <thumbnail>${png}</thumbnail>
   </game>
 XML
+    done
+    echo '</gameList>' >> "$gl"
+    echo "[install] wrote $gl"
+}
+
+write_gamelist "$PORTS_DIR"
+
+# Main Menu integration: mirror the Playora ports into /roms/playora/ so a
+# top-level "Playora" tile appears next to NES, SNES, etc. Same scripts —
+# no duplication of logic, only the directory listing differs.
+PLAYORA_SYS_DIR="$SD/playora"
+mkdir -p "$PLAYORA_SYS_DIR"
+# Sweep + copy current ports into the system folder.
+find "$PLAYORA_SYS_DIR" -maxdepth 1 -type f \( -name "Playora *.sh" -o -name "Playora *.png" \) -delete 2>/dev/null || true
+for sh in "$PORTS_DIR"/Playora\ *.sh; do
+    [ -f "$sh" ] || continue
+    cp "$sh" "$PLAYORA_SYS_DIR/"
+    base="$(basename "$sh")"
+    name_only="$(basename "$sh" .sh)"
+    png="$PORTS_DIR/${name_only}.png"
+    [ -f "$png" ] && cp "$png" "$PLAYORA_SYS_DIR/"
 done
-echo '</gameList>' >> "$GAMELIST"
-echo "[install] wrote $GAMELIST"
+write_gamelist "$PLAYORA_SYS_DIR"
+echo "[install] mirrored ports into $PLAYORA_SYS_DIR"
+
+# Try to register the Playora system in es_systems.cfg. dArkOSRE typical
+# locations — bail silently if we can't find one (the Ports menu still works).
+for ES_CFG in \
+    "$SD/configs/emulationstation/es_systems.cfg" \
+    "$SD/system/configs/emulationstation/es_systems.cfg" \
+    "$SD/.system/configs/emulationstation/es_systems.cfg" \
+    "$SD/.r36s-smart/es_systems.cfg" \
+    "$SD/configs/es_systems.cfg"; do
+    if [ -f "$ES_CFG" ]; then
+        if grep -q '<name>playora</name>' "$ES_CFG"; then
+            echo "[install] playora system already present in $ES_CFG"
+            break
+        fi
+        cp "$ES_CFG" "${ES_CFG}.playora-bak"
+        # Insert our block before the closing </systemList>.
+        awk '
+            /<\/systemList>/ && !done {
+                print "  <system>"
+                print "    <name>playora</name>"
+                print "    <fullname>Playora</fullname>"
+                print "    <path>/roms/playora</path>"
+                print "    <extension>.sh .SH</extension>"
+                print "    <command>%ROM%</command>"
+                print "    <theme>playora</theme>"
+                print "  </system>"
+                done = 1
+            }
+            { print }
+        ' "${ES_CFG}.playora-bak" > "$ES_CFG"
+        echo "[install] added playora system to $ES_CFG"
+        break
+    fi
+done
 
 sync
 echo

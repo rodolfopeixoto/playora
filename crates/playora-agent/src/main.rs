@@ -25,6 +25,7 @@ mod selfupdate;
 mod showlog;
 mod sync;
 mod tests;
+mod ttyui;
 mod tui;
 
 use anyhow::Result;
@@ -59,6 +60,9 @@ enum Cmd {
     Doctor {
         #[arg(long)]
         interactive: bool,
+        /// Apply suggested fixes (e.g. patch retroarch.cfg video_threaded).
+        #[arg(long)]
+        apply_fixes: bool,
     },
     /// Print current status (JSON)
     Status,
@@ -270,6 +274,8 @@ enum HardwareCmd {
     Snapshot {
         #[arg(long)]
         save: bool,
+        #[arg(long)]
+        pretty: bool,
     },
     Test {
         #[arg(long, default_value = "quick")]
@@ -334,14 +340,15 @@ fn main() -> Result<()> {
             device_name,
         } => cfg::cmd_init(cli.config.as_deref(), server_url, device_name),
         Cmd::Run => sync::cmd_run(load_cfg(cli.config.as_deref())?),
-        Cmd::Doctor { interactive } => {
-            tests::cmd_doctor(load_cfg(cli.config.as_deref())?, interactive)
-        }
+        Cmd::Doctor {
+            interactive: _,
+            apply_fixes,
+        } => tests::cmd_doctor(load_cfg(cli.config.as_deref())?, apply_fixes),
         Cmd::Status => sync::cmd_status(load_cfg(cli.config.as_deref())?),
         Cmd::Tui { screen } => tui::cmd_tui(load_cfg(cli.config.as_deref())?, screen),
         Cmd::Hardware(c) => match c {
-            HardwareCmd::Snapshot { save } => {
-                hw::cmd_snapshot(load_cfg(cli.config.as_deref())?, save)
+            HardwareCmd::Snapshot { save, pretty } => {
+                hw::cmd_snapshot(load_cfg(cli.config.as_deref())?, save, pretty)
             }
             HardwareCmd::Test { mode, interactive } => {
                 tests::cmd_hardware_test(load_cfg(cli.config.as_deref())?, &mode, interactive)
@@ -582,7 +589,7 @@ fn main() -> Result<()> {
         Cmd::QuickSync => {
             let cfg = load_cfg(cli.config.as_deref())?;
             let _ = tests::cmd_doctor(cfg.clone(), false);
-            let _ = hw::cmd_snapshot(cfg.clone(), true);
+            let _ = hw::cmd_snapshot(cfg.clone(), true, false);
             let _ = sync::cmd_heartbeat(cfg.clone());
             let _ = sync::cmd_sync_once(cfg);
             Ok(())

@@ -15,7 +15,6 @@
 
 use anyhow::{anyhow, Context, Result};
 use playora_common::AgentConfig;
-use qrcode::render::unicode::Dense1x2;
 use qrcode::QrCode;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -67,24 +66,22 @@ pub fn cmd_setup() -> Result<()> {
     println!("Dashboard setup page: {setup_url}");
     println!();
 
-    // ASCII QR of the dashboard setup URL.
-    println!("Scan with your phone:");
+    // Render QR: use qrencode CLI (more compact) if present, fall back
+    // to our Rust crate. Print to stdout so port-runner.sh (tty mode)
+    // sends it to /dev/tty1 for the user to scan with their phone.
+    println!("Scan this with your phone camera:");
     println!();
-    let qr = QrCode::new(setup_url.as_bytes()).context("qr encode")?;
-    let qr_text = qr
-        .render::<Dense1x2>()
-        .dark_color(Dense1x2::Light)
-        .light_color(Dense1x2::Dark)
-        .build();
+    let qr_text = crate::ttyui::qr_ansi(&setup_url);
     println!("{qr_text}");
     println!();
+    println!("(Or open: {setup_url})");
+    println!();
 
-    // Save PNG too.
+    // Save a PNG and try fbv as a bigger backup display.
+    let qr = QrCode::new(setup_url.as_bytes()).context("qr encode")?;
     let png_path = Path::new("/roms/.playora/auth_qr.png");
     if let Err(e) = save_qr_png(&qr, png_path) {
         eprintln!("warn: could not write QR PNG: {e}");
-    } else {
-        println!("PNG saved: {}", png_path.display());
     }
 
     // Spawn rclone in piped mode. It prints the authorize blob and waits
@@ -171,6 +168,8 @@ pub fn cmd_setup() -> Result<()> {
         return Err(anyhow!("rclone config exit {:?}", status.code()));
     }
 
+    println!();
+    println!("\x1b[1;32m  ✓ AUTHORIZED — Cloud is ready.\x1b[0m");
     println!();
     println!(
         "SUMMARY: Cloud Setup ok — remote '{REMOTE}' configured at {}",

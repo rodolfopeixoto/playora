@@ -1557,6 +1557,7 @@ dependencies = [
  "crossterm",
  "flate2",
  "hex",
+ "libc",
  "playora-common",
  "qrcode",
  "ratatui",

@@ -371,9 +371,13 @@ fn statvfs(path: &str) -> Option<(u64, u64)> {
     Some((s.f_blocks * s.f_frsize, s.f_bavail * s.f_frsize))
 }
 
-pub fn cmd_snapshot(cfg: AgentConfig, save: bool) -> Result<()> {
+pub fn cmd_snapshot(cfg: AgentConfig, save: bool, pretty: bool) -> Result<()> {
     let snap = snapshot();
-    println!("{}", serde_json::to_string_pretty(&snap)?);
+    if pretty {
+        print_pretty(&snap);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&snap)?);
+    }
     if save {
         let conn = crate::db::open(&crate::cfg::db_path())?;
         let ev = Event {
@@ -383,9 +387,93 @@ pub fn cmd_snapshot(cfg: AgentConfig, save: bool) -> Result<()> {
             payload: EventPayload::HardwareSnapshot(snap),
         };
         crate::db::enqueue(&conn, &ev)?;
-        eprintln!("queued event {}", ev.event_id);
+        if !pretty {
+            eprintln!("queued event {}", ev.event_id);
+        }
     }
     Ok(())
+}
+
+fn print_pretty(s: &HardwareSnapshot) {
+    use crate::ttyui::{self, Status};
+    ttyui::header("Hardware");
+    ttyui::section("CPU + Memory");
+    ttyui::row(
+        "cpu",
+        &format!("{} ({}, {} cores)", s.cpu_model, s.cpu_arch, s.cpu_cores),
+        Status::Info,
+    );
+    ttyui::row(
+        "memory",
+        &format!(
+            "{} MB total / {} MB free",
+            s.mem_total_mb, s.mem_available_mb
+        ),
+        Status::Info,
+    );
+    if !s.temps_c.is_empty() {
+        ttyui::row("temperatures", &format!("{:?} °C", s.temps_c), Status::Info);
+    }
+
+    ttyui::section("OS + Panel");
+    ttyui::row("kernel", &s.kernel, Status::Info);
+    ttyui::row(
+        "hardware string",
+        s.hardware_string.as_deref().unwrap_or("?"),
+        Status::Info,
+    );
+    ttyui::row(
+        "panel",
+        s.panel_compatible.as_deref().unwrap_or("?"),
+        Status::Info,
+    );
+    ttyui::row(
+        "retroarch",
+        if s.retroarch_detected {
+            "detected"
+        } else {
+            "absent"
+        },
+        if s.retroarch_detected {
+            Status::Ok
+        } else {
+            Status::Warn
+        },
+    );
+
+    ttyui::section("Storage");
+    for d in &s.disks {
+        ttyui::row(
+            &d.mount,
+            &format!(
+                "{} GB free / {} GB total",
+                d.free_bytes / 1024 / 1024 / 1024,
+                d.total_bytes / 1024 / 1024 / 1024
+            ),
+            if d.free_bytes > 1024 * 1024 * 1024 {
+                Status::Ok
+            } else {
+                Status::Warn
+            },
+        );
+    }
+
+    ttyui::section("Network");
+    for n in &s.net_ifs {
+        let label = if n.is_wireless { "wifi" } else { "wired" };
+        ttyui::row(
+            &format!("{} {}", label, n.name),
+            &format!(
+                "{} {}",
+                if n.up { "up" } else { "down" },
+                n.ipv4.as_deref().unwrap_or("(no ip)")
+            ),
+            if n.up { Status::Ok } else { Status::Warn },
+        );
+    }
+
+    println!();
+    println!("  Snapshot also synced to the dashboard.");
 }
 
 pub fn cmd_watch(interval: u64) -> Result<()> {
