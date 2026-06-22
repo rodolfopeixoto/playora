@@ -128,12 +128,13 @@ pub fn cmd_scan(cfg: AgentConfig) -> Result<()> {
                         serde_json::to_string(&meta.metadata)?, Utc::now().to_rfc3339()
                     ],
                 )?;
+                let meta_for_event = meta.clone();
                 let ev = Event {
                     event_id: EventId::new(),
                     device_id: cfg.device_id.clone(),
                     created_at: Utc::now(),
                     payload: EventPayload::RomScanned(RomScanned {
-                        metadata: meta,
+                        metadata: meta_for_event,
                         scanned_at: Utc::now(),
                     }),
                 };
@@ -141,6 +142,31 @@ pub fn cmd_scan(cfg: AgentConfig) -> Result<()> {
                     "INSERT OR IGNORE INTO events_outbox(event_id, event_type, payload_json, status, retry_count, created_at)
                      VALUES (?1, 'rom_scanned', ?2, 'pending', 0, ?3)",
                     rusqlite::params![ev.event_id.0, serde_json::to_string(&ev)?, ev.created_at.to_rfc3339()],
+                )?;
+                // Lightweight metadata: cleaned display name only. Cover/genre
+                // come from a later out-of-tx fetcher (TheGamesDB) so we don't
+                // block the scan on slow HTTP.
+                let cleaned = crate::metadata::clean_query(&meta.name);
+                let mev = Event {
+                    event_id: EventId::new(),
+                    device_id: cfg.device_id.clone(),
+                    created_at: Utc::now(),
+                    payload: EventPayload::GameMetadata(GameMetadataEvent {
+                        system: format!("{:?}", meta.system).to_lowercase(),
+                        name_query: cleaned.clone(),
+                        display_name: cleaned,
+                        genre: String::new(),
+                        year: String::new(),
+                        publisher: String::new(),
+                        cover_url: String::new(),
+                        source: "local".into(),
+                        captured_at: Utc::now(),
+                    }),
+                };
+                tx.execute(
+                    "INSERT OR IGNORE INTO events_outbox(event_id, event_type, payload_json, status, retry_count, created_at)
+                     VALUES (?1, 'game_metadata', ?2, 'pending', 0, ?3)",
+                    rusqlite::params![mev.event_id.0, serde_json::to_string(&mev)?, mev.created_at.to_rfc3339()],
                 )?;
                 count += 1;
                 *per_system.entry(sys_name.clone()).or_default() += 1;

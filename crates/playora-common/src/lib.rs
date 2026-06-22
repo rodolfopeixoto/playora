@@ -334,6 +334,19 @@ pub struct Activity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameMetadataEvent {
+    pub system: String,
+    pub name_query: String,
+    pub display_name: String,
+    pub genre: String,
+    pub year: String,
+    pub publisher: String,
+    pub cover_url: String,
+    pub source: String,
+    pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RestoreProgress {
     pub bytes_done: u64,
     pub bytes_total: u64,
@@ -359,6 +372,7 @@ pub enum EventPayload {
     SaveSnapshot(SaveSnapshot),
     Activity(Activity),
     RestoreProgress(RestoreProgress),
+    GameMetadata(GameMetadataEvent),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

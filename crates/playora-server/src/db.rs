@@ -199,6 +199,21 @@ CREATE TABLE IF NOT EXISTS cloud_download_requests (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS cloud_dl_dev_status ON cloud_download_requests(device_id, status);
+CREATE TABLE IF NOT EXISTS game_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    system TEXT NOT NULL,
+    name_query TEXT NOT NULL,
+    display_name TEXT,
+    genre TEXT,
+    year TEXT,
+    publisher TEXT,
+    cover_url TEXT,
+    source TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE(device_id, system, name_query)
+);
+CREATE INDEX IF NOT EXISTS game_metadata_sys ON game_metadata(device_id, system);
 CREATE TABLE IF NOT EXISTS update_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id TEXT NOT NULL,

@@ -150,6 +150,7 @@ pub async fn events_batch(
             EventPayload::SaveSnapshot(_) => "save_snapshot",
             EventPayload::Activity(_) => "activity",
             EventPayload::RestoreProgress(_) => "restore_progress",
+            EventPayload::GameMetadata(_) => "game_metadata",
         };
         let r = conn.execute(
             "INSERT INTO events(event_id,device_id,event_type,payload_json,received_at) VALUES (?1,?2,?3,?4,?5)",
@@ -237,6 +238,24 @@ pub async fn events_batch(
                     let _ = conn.execute(
                         "INSERT INTO restore_progress(device_id, bytes_done, bytes_total, files_done, current_path, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                         rusqlite::params![ev.device_id.0, p.bytes_done as i64, p.bytes_total as i64, p.files_done as i64, p.current_path, Utc::now().to_rfc3339()],
+                    );
+                } else if let EventPayload::GameMetadata(m) = &ev.payload {
+                    let _ = conn.execute(
+                        "INSERT INTO game_metadata(device_id, system, name_query, display_name, genre, year, publisher, cover_url, source, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                         ON CONFLICT(device_id, system, name_query) DO UPDATE SET
+                            display_name = COALESCE(NULLIF(excluded.display_name, ''), display_name),
+                            genre        = COALESCE(NULLIF(excluded.genre, ''),        genre),
+                            year         = COALESCE(NULLIF(excluded.year, ''),         year),
+                            publisher    = COALESCE(NULLIF(excluded.publisher, ''),    publisher),
+                            cover_url    = COALESCE(NULLIF(excluded.cover_url, ''),    cover_url),
+                            source       = excluded.source,
+                            updated_at   = excluded.updated_at",
+                        rusqlite::params![
+                            ev.device_id.0, m.system, m.name_query,
+                            m.display_name, m.genre, m.year, m.publisher,
+                            m.cover_url, m.source, Utc::now().to_rfc3339()
+                        ],
                     );
                 }
                 if let EventPayload::GameSessionStarted(g) = &ev.payload {

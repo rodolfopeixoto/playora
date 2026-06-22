@@ -322,6 +322,8 @@ button.del{background:#3a0a0a;color:#ff7676;border:1px solid #4a1414;border-radi
 button.del:hover{background:#4a1010;color:#fff}
 button.upd{background:#0f2818;color:#5fbf76;border:1px solid #1f3d28;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px}
 button.upd:hover{background:#1a3a25}
+.pill.playing{background:#1a3d5c;color:#7c9eff;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.65}}
 "#;
 
 fn header(active: &str) -> String {
@@ -714,7 +716,20 @@ pub async fn activity_detail_page(
 pub async fn games_list_page(AxState(state): AxState<State>) -> Html<String> {
     let conn = state.lock().await;
     let mut rows_html = String::new();
-    let mut stmt = conn.prepare("SELECT system, game_name, COUNT(*), SUM(duration_seconds), MAX(started_at) FROM game_sessions WHERE game_name IS NOT NULL GROUP BY system, game_name ORDER BY 4 DESC").unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.system, s.game_name, COUNT(*), SUM(s.duration_seconds), MAX(s.started_at),
+                COALESCE(m.cover_url,''), COALESCE(m.year,''), COALESCE(m.genre,''),
+                COALESCE(m.display_name, s.game_name)
+         FROM game_sessions s
+         LEFT JOIN game_metadata m
+           ON m.system = s.system
+          AND m.name_query = REPLACE(s.game_name,'_',' ')
+         WHERE s.game_name IS NOT NULL
+         GROUP BY s.system, s.game_name
+         ORDER BY 4 DESC",
+        )
+        .unwrap();
     let rows = stmt
         .query_map([], |r| {
             Ok((
@@ -723,20 +738,52 @@ pub async fn games_list_page(AxState(state): AxState<State>) -> Html<String> {
                 r.get::<_, i64>(2)?,
                 r.get::<_, i64>(3)?,
                 r.get::<_, String>(4).unwrap_or_default(),
+                r.get::<_, String>(5)?,
+                r.get::<_, String>(6)?,
+                r.get::<_, String>(7)?,
+                r.get::<_, String>(8)?,
             ))
         })
         .unwrap();
-    for (sys, game, n, dur, last) in rows.flatten() {
+    for (sys, game, n, dur, last, cover, year, genre, display) in rows.flatten() {
+        let cover_cell = if cover.is_empty() {
+            "<div class=\"cover-fallback\">🎮</div>".to_string()
+        } else {
+            format!(
+                "<img class=\"cover\" loading=\"lazy\" src=\"{}\">",
+                esc(&cover)
+            )
+        };
+        let meta_line = if year.is_empty() && genre.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "<div class=\"muted\" style=\"font-size:11px\">{} {}</div>",
+                esc(&year),
+                esc(&genre)
+            )
+        };
         rows_html.push_str(&format!(
-            "<tr><td>{}</td><td><span class=\"pill\">{}</span></td><td>{}</td><td>{}</td><td class=\"muted\">{}</td></tr>",
-            esc(&game), esc(&sys), n, fmt_dur(dur), esc(&relative_time(&last))
+            "<tr><td class=\"cover-cell\">{}</td><td><div>{}</div>{}<div class=\"muted\" style=\"font-size:10px\">{}</div></td><td><span class=\"pill\">{}</span></td><td>{}</td><td>{}</td><td class=\"muted\">{}</td></tr>",
+            cover_cell,
+            esc(&display),
+            meta_line,
+            esc(&game),
+            esc(&sys),
+            n,
+            fmt_dur(dur),
+            esc(&relative_time(&last))
         ));
     }
     if rows_html.is_empty() {
-        rows_html.push_str("<tr><td colspan=5 class=\"empty\">No games tracked yet.</td></tr>");
+        rows_html.push_str("<tr><td colspan=6 class=\"empty\">No games tracked yet. Open a ROM from EmulationStation — the agent will pick it up within 60 s.</td></tr>");
     }
     let html = format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><title>Games · Playora</title><style>{css}</style></head><body><div class="wrap">{hdr}<h1>Games</h1><table><thead><tr><th>Game</th><th>System</th><th>Sessions</th><th>Total time</th><th>Last played</th></tr></thead><tbody>{rows_html}</tbody></table></div></body></html>"#,
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>Games · Playora</title><style>{css}
+.cover-cell{{width:64px;padding:6px}}
+.cover{{width:48px;height:64px;object-fit:cover;border-radius:4px;display:block}}
+.cover-fallback{{width:48px;height:64px;background:#1a1a22;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:24px}}
+</style></head><body><div class="wrap">{hdr}<h1>Games</h1><table><thead><tr><th></th><th>Game</th><th>System</th><th>Sessions</th><th>Total time</th><th>Last played</th></tr></thead><tbody>{rows_html}</tbody></table></div></body></html>"#,
         css = CSS,
         hdr = header("games")
     );
@@ -1031,6 +1078,17 @@ pub async fn device_page(
         )
         .unwrap_or(0);
 
+    // Now-playing: most recent session without ended_at.
+    let now_playing: Option<(String, String)> = conn
+        .query_row(
+            "SELECT system, COALESCE(game_name,'') FROM game_sessions
+             WHERE device_id=?1 AND ended_at IS NULL
+             ORDER BY id DESC LIMIT 1",
+            [id.clone()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+
     // Heartbeat recency drives the "Auto-running" badge.
     let recent_heartbeat: Option<String> = conn
         .query_row(
@@ -1049,14 +1107,23 @@ pub async fn device_page(
     } else {
         "<span class=\"pill warn\" title=\"last heartbeat is older than 2 min — run Ports → Playora Autosync Enable on the device\">Idle</span>"
     };
+    let now_playing_badge = match &now_playing {
+        Some((sys, game)) if !game.is_empty() => format!(
+            r#"<span class="pill playing" title="Playora session tracker sees this game open">▶ {} · {}</span>"#,
+            esc(game),
+            esc(sys)
+        ),
+        Some((sys, _)) => format!(r#"<span class="pill playing">▶ {}</span>"#, esc(sys)),
+        None => String::new(),
+    };
 
     let fs_block = match last_ip.as_deref().filter(|s| !s.is_empty()) {
         Some(ip) => format!(
-            r#"<p class="sub">Last LAN IP: <code>{ip}</code> {auto_badge} · <a href="http://{ip}:7878/" target="_blank" class="open-fs">Open File Browser →</a> · <a href="/dashboard/cloud-roms/{did}">Cloud ROMs →</a> · <form method="post" action="/dashboard/device/{did}/update" style="display:inline" onsubmit="return confirm('Queue agent self-update?')"><button class="upd" type="submit">Update Agent</button></form></p>"#,
+            r#"<p class="sub">Last LAN IP: <code>{ip}</code> {auto_badge} {now_playing_badge} · <a href="http://{ip}:7878/" target="_blank" class="open-fs">Open File Browser →</a> · <a href="/dashboard/cloud-roms/{did}">Cloud ROMs →</a> · <form method="post" action="/dashboard/device/{did}/update" style="display:inline" onsubmit="return confirm('Queue agent self-update?')"><button class="upd" type="submit">Update Agent</button></form></p>"#,
             did = esc(&id)
         ),
         None => format!(
-            "<p class=\"sub muted\">No LAN IP recorded yet {auto_badge}. <a href=\"/dashboard/cloud-roms/{did}\">Cloud ROMs →</a> · <form method=\"post\" action=\"/dashboard/device/{did}/update\" style=\"display:inline\"><button class=\"upd\" type=\"submit\">Update Agent</button></form></p>",
+            "<p class=\"sub muted\">No LAN IP recorded yet {auto_badge} {now_playing_badge}. <a href=\"/dashboard/cloud-roms/{did}\">Cloud ROMs →</a> · <form method=\"post\" action=\"/dashboard/device/{did}/update\" style=\"display:inline\"><button class=\"upd\" type=\"submit\">Update Agent</button></form></p>",
             did = esc(&id)
         ),
     };

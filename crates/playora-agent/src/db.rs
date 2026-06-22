@@ -115,6 +115,7 @@ fn event_type_str(p: &playora_common::EventPayload) -> &'static str {
         SaveSnapshot(_) => "save_snapshot",
         Activity(_) => "activity",
         RestoreProgress(_) => "restore_progress",
+        GameMetadata(_) => "game_metadata",
     }
 }
 
