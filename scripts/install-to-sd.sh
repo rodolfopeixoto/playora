@@ -368,6 +368,8 @@ cloud_backup_daily_hour_utc = 6
 scan_daily_hour_utc = 5
 # Auto-extract anything in /roms/_inbox at 04:00 UTC.
 extract_roms_daily_hour_utc = 4
+# Cover lookup right after scan finishes — fills missing thumbnails.
+fetch_covers_daily_hour_utc = 7
 EOF
     echo "[install] wrote config: $CFG"
 fi

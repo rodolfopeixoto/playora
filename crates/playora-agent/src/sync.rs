@@ -148,6 +148,9 @@ pub fn cmd_run(cfg: AgentConfig) -> Result<()> {
     if let Some(h) = cfg.extract_roms_daily_hour_utc {
         println!("scheduled: extract ROMs daily at {h:02}:00 UTC");
     }
+    if let Some(h) = cfg.fetch_covers_daily_hour_utc {
+        println!("scheduled: fetch covers daily at {h:02}:00 UTC");
+    }
     let mut sched = Scheduler::default();
     let mut sessions = crate::sessions::SessionTracker::default();
     loop {
@@ -174,6 +177,7 @@ struct Scheduler {
     last_cloud_backup_day: Option<i32>,
     last_scan_day: Option<i32>,
     last_extract_day: Option<i32>,
+    last_fetch_covers_day: Option<i32>,
 }
 
 impl Scheduler {
@@ -201,6 +205,13 @@ impl Scheduler {
                 println!("[schedule] firing extract-roms");
                 run_inhibited("extract-roms", &["extract-roms"], cfg);
                 self.last_extract_day = Some(day_key);
+            }
+        }
+        if let Some(target) = cfg.fetch_covers_daily_hour_utc {
+            if h == target && self.last_fetch_covers_day != Some(day_key) {
+                println!("[schedule] firing fetch-covers");
+                run_inhibited("fetch-covers", &["fetch-covers"], cfg);
+                self.last_fetch_covers_day = Some(day_key);
             }
         }
     }

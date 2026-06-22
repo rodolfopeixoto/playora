@@ -758,14 +758,28 @@ pub async fn games_by_system_page(
     AxState(state): AxState<State>,
     AxPath(system): AxPath<String>,
 ) -> Html<String> {
-    games_render(state, Some(system)).await
+    games_render(state, Some(system), None).await
 }
 
-pub async fn games_list_page(AxState(state): AxState<State>) -> Html<String> {
-    games_render(state, None).await
+pub async fn games_list_page(
+    AxState(state): AxState<State>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Html<String> {
+    games_render(state, None, q.get("device").cloned()).await
 }
 
-async fn games_render(state: State, filter_system: Option<String>) -> Html<String> {
+pub async fn device_games_page(
+    AxState(state): AxState<State>,
+    AxPath(device_id): AxPath<String>,
+) -> Html<String> {
+    games_render(state, None, Some(device_id)).await
+}
+
+async fn games_render(
+    state: State,
+    filter_system: Option<String>,
+    filter_device: Option<String>,
+) -> Html<String> {
     let conn = state.lock().await;
     let mut systems_html = String::new();
     let all_cls = if filter_system.is_none() {
@@ -802,7 +816,17 @@ async fn games_render(state: State, filter_system: Option<String>) -> Html<Strin
     }
 
     let mut rows_html = String::new();
-    let sql = if filter_system.is_some() {
+    let mut where_parts: Vec<String> = vec!["s.game_name IS NOT NULL".into()];
+    let mut params: Vec<String> = Vec::new();
+    if let Some(s) = filter_system.as_ref() {
+        params.push(s.clone());
+        where_parts.push(format!("s.system = ?{}", params.len()));
+    }
+    if let Some(d) = filter_device.as_ref() {
+        params.push(d.clone());
+        where_parts.push(format!("s.device_id = ?{}", params.len()));
+    }
+    let sql = format!(
         "SELECT s.system, s.game_name, COUNT(*), SUM(s.duration_seconds), MAX(s.started_at),
                 COALESCE(m.cover_url,''), COALESCE(m.year,''), COALESCE(m.genre,''),
                 COALESCE(m.display_name, s.game_name)
@@ -810,22 +834,12 @@ async fn games_render(state: State, filter_system: Option<String>) -> Html<Strin
          LEFT JOIN game_metadata m
            ON m.system = s.system
           AND m.name_query = REPLACE(s.game_name,'_',' ')
-         WHERE s.game_name IS NOT NULL AND s.system = ?1
+         WHERE {}
          GROUP BY s.system, s.game_name
-         ORDER BY 4 DESC"
-    } else {
-        "SELECT s.system, s.game_name, COUNT(*), SUM(s.duration_seconds), MAX(s.started_at),
-                COALESCE(m.cover_url,''), COALESCE(m.year,''), COALESCE(m.genre,''),
-                COALESCE(m.display_name, s.game_name)
-         FROM game_sessions s
-         LEFT JOIN game_metadata m
-           ON m.system = s.system
-          AND m.name_query = REPLACE(s.game_name,'_',' ')
-         WHERE s.game_name IS NOT NULL
-         GROUP BY s.system, s.game_name
-         ORDER BY 4 DESC"
-    };
-    let mut stmt = conn.prepare(sql).unwrap();
+         ORDER BY 4 DESC",
+        where_parts.join(" AND ")
+    );
+    let mut stmt = conn.prepare(&sql).unwrap();
     let map_row = |r: &rusqlite::Row| -> rusqlite::Result<(
         String,
         String,
@@ -849,14 +863,13 @@ async fn games_render(state: State, filter_system: Option<String>) -> Html<Strin
             r.get::<_, String>(8)?,
         ))
     };
-    let collected: Vec<_> = if let Some(sys) = filter_system.as_ref() {
-        stmt.query_map([sys.as_str()], map_row)
-            .unwrap()
-            .flatten()
-            .collect()
-    } else {
-        stmt.query_map([], map_row).unwrap().flatten().collect()
-    };
+    let param_refs: Vec<&dyn rusqlite::ToSql> =
+        params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
+    let collected: Vec<_> = stmt
+        .query_map(param_refs.as_slice(), map_row)
+        .unwrap()
+        .flatten()
+        .collect();
     for (sys, game, n, dur, last, cover, year, genre, display) in collected {
         let cover_cell = if cover.is_empty() {
             "<div class=\"cover-fallback\">🎮</div>".to_string()
@@ -890,9 +903,32 @@ async fn games_render(state: State, filter_system: Option<String>) -> Html<Strin
     if rows_html.is_empty() {
         rows_html.push_str("<tr><td colspan=6 class=\"empty\">No games tracked yet. Open a ROM from EmulationStation — the agent will pick it up within 60 s.</td></tr>");
     }
-    let title = match &filter_system {
-        Some(s) => format!("Games · {}", esc(s)),
-        None => "Games".to_string(),
+    let title = match (&filter_system, &filter_device) {
+        (Some(s), _) => format!("Games · {}", esc(s)),
+        (_, Some(d)) => format!("Games · device <code>{}</code>", esc(d)),
+        _ => "Games".to_string(),
+    };
+    let device_link = if let Some(did) = filter_device.as_ref() {
+        let ip: Option<String> = conn
+            .query_row(
+                "SELECT last_ip FROM devices WHERE device_id=?1",
+                [did.as_str()],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten();
+        match ip {
+            Some(ip) if !ip.is_empty() => format!(
+                r#"<p class="sub"><a href="http://{ip}:7878/" target="_blank">Open File Browser at {ip} →</a> · <a href="/dashboard/device/{}">← back to device</a></p>"#,
+                esc(did)
+            ),
+            _ => format!(
+                r#"<p class="sub muted"><a href="/dashboard/device/{}">← back to device</a></p>"#,
+                esc(did)
+            ),
+        }
+    } else {
+        String::new()
     };
     let html = format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><title>Games · Playora</title><style>{css}
@@ -900,7 +936,7 @@ async fn games_render(state: State, filter_system: Option<String>) -> Html<Strin
 .cover{{width:48px;height:64px;object-fit:cover;border-radius:4px;display:block}}
 .cover-fallback{{width:48px;height:64px;background:#1a1a22;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:24px}}
 .pill.ok{{background:#0f2818;color:#5fbf76}}
-</style></head><body><div class="wrap">{hdr}<h1>{title}</h1><p class="sub">{systems_html}</p><table><thead><tr><th></th><th>Game</th><th>System</th><th>Sessions</th><th>Total time</th><th>Last played</th></tr></thead><tbody>{rows_html}</tbody></table></div></body></html>"#,
+</style></head><body><div class="wrap">{hdr}<h1>{title}</h1>{device_link}<p class="sub">{systems_html}</p><table><thead><tr><th></th><th>Game</th><th>System</th><th>Sessions</th><th>Total time</th><th>Last played</th></tr></thead><tbody>{rows_html}</tbody></table></div></body></html>"#,
         css = CSS,
         hdr = header("games")
     );
@@ -1236,11 +1272,11 @@ pub async fn device_page(
 
     let fs_block = match last_ip.as_deref().filter(|s| !s.is_empty()) {
         Some(ip) => format!(
-            r#"<p class="sub">Last LAN IP: <code>{ip}</code> {auto_badge} {now_playing_badge} · <a href="http://{ip}:7878/" target="_blank" class="open-fs">Open File Browser →</a> · <a href="/dashboard/cloud-roms/{did}">Cloud ROMs →</a> · <form method="post" action="/dashboard/device/{did}/update" style="display:inline" onsubmit="return confirm('Queue agent self-update?')"><button class="upd" type="submit">Update Agent</button></form></p>"#,
+            r#"<p class="sub">Last LAN IP: <code>{ip}</code> {auto_badge} {now_playing_badge} · <a href="http://{ip}:7878/" target="_blank" class="open-fs">Open File Browser →</a> · <a href="/dashboard/device/{did}/games">Games →</a> · <a href="/dashboard/cloud-roms/{did}">Cloud ROMs →</a> · <form method="post" action="/dashboard/device/{did}/update" style="display:inline" onsubmit="return confirm('Queue agent self-update?')"><button class="upd" type="submit">Update Agent</button></form></p>"#,
             did = esc(&id)
         ),
         None => format!(
-            "<p class=\"sub muted\">No LAN IP recorded yet {auto_badge} {now_playing_badge}. <a href=\"/dashboard/cloud-roms/{did}\">Cloud ROMs →</a> · <form method=\"post\" action=\"/dashboard/device/{did}/update\" style=\"display:inline\"><button class=\"upd\" type=\"submit\">Update Agent</button></form></p>",
+            "<p class=\"sub muted\">No LAN IP recorded yet {auto_badge} {now_playing_badge}. <a href=\"/dashboard/device/{did}/games\">Games →</a> · <a href=\"/dashboard/cloud-roms/{did}\">Cloud ROMs →</a> · <form method=\"post\" action=\"/dashboard/device/{did}/update\" style=\"display:inline\"><button class=\"upd\" type=\"submit\">Update Agent</button></form></p>",
             did = esc(&id)
         ),
     };

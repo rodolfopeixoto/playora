@@ -181,6 +181,10 @@ async fn main() -> Result<()> {
             "/dashboard/games/:system",
             get(dashboard::games_by_system_page),
         )
+        .route(
+            "/dashboard/device/:id/games",
+            get(dashboard::device_games_page),
+        )
         .route("/dashboard/activity", get(dashboard::activity_page))
         .route(
             "/dashboard/activity/:id",

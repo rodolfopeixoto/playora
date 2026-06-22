@@ -512,6 +512,8 @@ pub struct AgentConfig {
     pub scan_daily_hour_utc: Option<u8>,
     #[serde(default)]
     pub extract_roms_daily_hour_utc: Option<u8>,
+    #[serde(default)]
+    pub fetch_covers_daily_hour_utc: Option<u8>,
 }
 
 impl Default for AgentConfig {
@@ -539,6 +541,7 @@ impl Default for AgentConfig {
             cloud_backup_daily_hour_utc: None,
             scan_daily_hour_utc: None,
             extract_roms_daily_hour_utc: None,
+            fetch_covers_daily_hour_utc: None,
         }
     }
 }
