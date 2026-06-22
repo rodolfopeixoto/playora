@@ -180,91 +180,12 @@ write_port "Fetch Covers"    "fetch-covers"                      300   tty
 write_port "Kodi Setup"      "kodi setup"                        60    tty
 write_port "Update"          "self-update"                       180   tty
 
-# Autosync Enable / Disable (Status is now part of Doctor)
-cat > "$PORTS_DIR/Playora Autosync Enable.sh" <<'EOF'
-#!/bin/sh
-SETSID=$(command -v setsid 2>/dev/null)
-[ -n "$SETSID" ] && PREFIX="$SETSID nohup" || PREFIX="nohup"
-$PREFIX sh -c '
-    mkdir -p /roms/.playora/logs
-    LOG="/roms/.playora/logs/autosync_enable_$(date +%Y%m%d_%H%M%S).log"
-    {
-        echo "==== $(date) ===="
-        if command -v systemctl >/dev/null 2>&1; then
-            sudo tee /etc/systemd/system/playora-agent.service > /dev/null <<UNIT
-[Unit]
-Description=Playora agent
-After=network-online.target
-[Service]
-ExecStart=/roms/.playora/playora-agent --config /roms/.playora/agent.toml run
-Restart=on-failure
-RestartSec=10
-StandardOutput=append:/roms/.playora/logs/run.log
-StandardError=append:/roms/.playora/logs/run.log
-[Install]
-WantedBy=multi-user.target
-UNIT
-            sudo systemctl daemon-reload
-            sudo systemctl enable --now playora-agent.service && echo "service enabled"
-        else
-            nohup /roms/.playora/playora-agent --config /roms/.playora/agent.toml run \
-                > /roms/.playora/logs/run.log 2>&1 &
-            echo "running as background process (no systemd)"
-        fi
-    } >> "$LOG" 2>&1
-' </dev/null >/dev/null 2>&1 &
-sleep 1
-exit 0
-EOF
-chmod 0755 "$PORTS_DIR/Playora Autosync Enable.sh"
-echo "[install] wrote $PORTS_DIR/Playora Autosync Enable.sh"
-write_splash "Autosync Enable" "systemd enable + start" "60"
+# Autosync Enable / Disable use the same foreground port-runner pattern.
+# The systemd unit work lives in the agent's autosync-enable subcommand.
+write_port "Autosync Enable"  "autosync-enable"  60   tty
+write_port "Autosync Disable" "autosync-disable" 30   tty
 
-cat > "$PORTS_DIR/Playora Autosync Disable.sh" <<'EOF'
-#!/bin/sh
-SETSID=$(command -v setsid 2>/dev/null)
-[ -n "$SETSID" ] && PREFIX="$SETSID nohup" || PREFIX="nohup"
-$PREFIX sh -c '
-    LOG="/roms/.playora/logs/autosync_disable_$(date +%Y%m%d_%H%M%S).log"
-    mkdir -p /roms/.playora/logs
-    {
-        echo "==== $(date) ===="
-        sudo systemctl disable --now playora-agent.service 2>/dev/null || true
-        pkill -f "playora-agent.*run" 2>/dev/null || true
-        echo "service disabled"
-    } >> "$LOG" 2>&1
-' </dev/null >/dev/null 2>&1 &
-sleep 1
-exit 0
-EOF
-chmod 0755 "$PORTS_DIR/Playora Autosync Disable.sh"
-echo "[install] wrote $PORTS_DIR/Playora Autosync Disable.sh"
-write_splash "Autosync Disable" "systemd disable + stop" "60"
-
-cat > "$PORTS_DIR/Playora Recover.sh" <<'EOF'
-#!/bin/sh
-SETSID=$(command -v setsid 2>/dev/null)
-[ -n "$SETSID" ] && PREFIX="$SETSID nohup" || PREFIX="nohup"
-$PREFIX sh -c '
-    LOG="/roms/.playora/logs/recover_$(date +%Y%m%d_%H%M%S).log"
-    mkdir -p /roms/.playora/logs
-    {
-        echo "==== $(date) ===="
-        sudo killall -9 playora-agent 2>/dev/null
-        sudo killall -9 gptokeyb 2>/dev/null
-        rm -f /tmp/playora-*.lock 2>/dev/null
-        sudo systemctl restart emulationstation 2>/dev/null \
-            || sudo systemctl start emulationstation 2>/dev/null \
-            || (cd /; nohup emulationstation >/dev/null 2>&1 &)
-        echo "recover done"
-    } > "$LOG" 2>&1
-' </dev/null >/dev/null 2>&1 &
-sleep 1
-exit 0
-EOF
-chmod 0755 "$PORTS_DIR/Playora Recover.sh"
-echo "[install] wrote $PORTS_DIR/Playora Recover.sh"
-write_splash "Recover" "kill agent + restart ES" "30"
+write_port "Recover" "recover" 30 tty
 
 QUEUE="$PLAYORA_DIR/delete_queue.txt"
 if [ ! -f "$QUEUE" ]; then

@@ -1,6 +1,7 @@
 //! playora-agent — runs on the R36S, captures runtime data, syncs to server.
 
 mod activity;
+mod autosync;
 mod catalog;
 mod cfg;
 mod cleanup;
@@ -207,6 +208,12 @@ enum Cmd {
     },
     /// Fetch missing game covers + metadata from TheGamesDB (best-effort, rate-limited)
     FetchCovers,
+    /// Install + start the autosync systemd service
+    AutosyncEnable,
+    /// Stop + remove the autosync systemd service
+    AutosyncDisable,
+    /// Kill stuck agent processes + clear lock files (ES restarts on exit)
+    Recover,
     /// Process /roms/.playora/delete_queue.txt and (optionally) server delete-requests
     Cleanup {
         /// Also pull pending deletions from the dashboard server.
@@ -644,6 +651,9 @@ fn main() -> Result<()> {
             let cfg = load_cfg(cli.config.as_deref())?;
             metadata::cmd_fetch_covers(cfg)
         }
+        Cmd::AutosyncEnable => autosync::cmd_enable(),
+        Cmd::AutosyncDisable => autosync::cmd_disable(),
+        Cmd::Recover => autosync::cmd_recover(),
         Cmd::Serve { bind } => fileserver::cmd_serve(&bind),
     }
 }
