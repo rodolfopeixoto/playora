@@ -62,35 +62,29 @@ AGENT="/roms/.playora/playora-agent --config /roms/.playora/agent.toml"
 ESUDO="sudo"
 [ "$(id -u)" = "0" ] && ESUDO=""
 
-# PortMaster pattern: take /dev/tty1, clear, run on it.
 export TERM=linux
 $ESUDO chmod 666 /dev/tty1 /dev/uinput 2>/dev/null || true
 printf '\033c' > /dev/tty1
 exec </dev/tty1 >/dev/tty1 2>&1
 
-log() {
-    printf '\033[2m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"
-    echo "[$(date +%H:%M:%S)] $*" >> "$LOG"
-}
-
-END_RC=1
 trap '
-    RC=$END_RC
-    log "exit $RC"
-    $AGENT activity-end "$NAME" "$RC" --log "$LOG" >/dev/null 2>&1 || true
+    $AGENT activity-end "$NAME" "${END_RC:-1}" --log "$LOG" >/dev/null 2>&1 || true
     $AGENT sync >/dev/null 2>&1 || true
+' EXIT INT TERM
+
+restart_es() {
     clear > /dev/tty1
     $ESUDO systemctl restart emulationstation 2>/dev/null \
         || $ESUDO systemctl restart emustation 2>/dev/null \
         || true
-' EXIT INT TERM
+}
 
 printf '\033[1;35m╔══════════════════════════════════════════════════════╗\n'
 printf '║  \033[1;37mPLAYORA · %-43s\033[1;35m║\n' "$NAME"
 printf '╚══════════════════════════════════════════════════════╝\033[0m\n\n'
 
-log "command: $CMD"
-log "timeout: ${TIMEOUT}s"
+echo "[$(date +%H:%M:%S)] command: $CMD" | tee -a "$LOG"
+echo "[$(date +%H:%M:%S)] timeout: ${TIMEOUT}s" | tee -a "$LOG"
 
 $AGENT activity-begin "$NAME" >/dev/null 2>&1 || true
 
@@ -109,13 +103,68 @@ else
 fi
 
 if [ "$END_RC" = "0" ]; then
-    printf '\n\033[1;32m  ✓ DONE  \033[0m exit 0\n'
+    printf '\n\033[1;32m  ✓ DONE  \033[0m exit 0\n' | tee -a "$LOG"
 else
-    printf '\n\033[1;31m  ✗ FAIL  \033[0m exit %s\n' "$END_RC"
+    printf '\n\033[1;31m  ✗ FAIL  \033[0m exit %s\n' "$END_RC" | tee -a "$LOG"
 fi
-printf '\n\033[2m  Returning to EmulationStation in 5s...\033[0m\n'
-sleep 5
-exit $END_RC
+
+# Interactive review + restart prompt. dArkOSRE ships `dialog`, which makes
+# the gamepad navigate via gptokeyb (dpad = arrows, A = OK/Enter, B = Cancel).
+if command -v dialog >/dev/null 2>&1; then
+    while true; do
+        choice=$(dialog --no-mouse --keep-tite \
+            --backtitle "Playora · $NAME" \
+            --title "Done (exit $END_RC)" \
+            --menu "Use D-Pad to move, A to choose, B to back out." 14 60 4 \
+                view "📜  View full log (scrollable, B to close)" \
+                restart "↻  Restart EmulationStation now" \
+                stay "💤  Stay on terminal (run more commands later)" \
+            2>&1 >/dev/tty1) || choice="restart"
+        case "$choice" in
+            view)
+                dialog --no-mouse --keep-tite \
+                    --backtitle "Playora · $NAME" \
+                    --title "Log — $(basename "$LOG")" \
+                    --textbox "$LOG" 0 0 2>/dev/tty1 || true
+                ;;
+            stay)
+                clear > /dev/tty1
+                printf 'Returning to a shell prompt. Type "exit" or press the reset combo to return to ES.\n' > /dev/tty1
+                $ESUDO /bin/sh </dev/tty1 >/dev/tty1 2>&1
+                restart_es
+                exit "$END_RC"
+                ;;
+            *)
+                restart_es
+                exit "$END_RC"
+                ;;
+        esac
+    done
+else
+    # No dialog binary — print a textual menu + read raw key from tty1.
+    printf '\n\033[1;37mPress A/Enter to restart ES · B/Escape to view the log · S to stay\033[0m\n'
+    while :; do
+        IFS= read -r -n 1 key
+        case "$key" in
+            "" | a | A | y | Y) restart_es; exit "$END_RC" ;;
+            b | B)
+                if command -v less >/dev/null 2>&1; then
+                    less "$LOG"
+                else
+                    tail -n 200 "$LOG"
+                    printf '\n(end of log — press any key)\n'
+                    IFS= read -r -n 1 _
+                fi
+                ;;
+            s | S)
+                clear > /dev/tty1
+                $ESUDO /bin/sh </dev/tty1 >/dev/tty1 2>&1
+                restart_es
+                exit "$END_RC"
+                ;;
+        esac
+    done
+fi
 RUNNER
 chmod 0755 "$PLAYORA_DIR/port-runner.sh"
 
