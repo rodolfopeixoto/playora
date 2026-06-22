@@ -13,6 +13,7 @@ mod download;
 mod extract;
 mod features;
 mod fileserver;
+mod fix_exit;
 mod hw;
 mod kodi;
 mod launcher;
@@ -214,6 +215,11 @@ enum Cmd {
     AutosyncDisable,
     /// Kill stuck agent processes + clear lock files (ES restarts on exit)
     Recover,
+    /// Patch retroarch.cfg to fix the Select+Start exit-game freeze on R36S
+    FixExitGame {
+        #[arg(long)]
+        apply: bool,
+    },
     /// Process /roms/.playora/delete_queue.txt and (optionally) server delete-requests
     Cleanup {
         /// Also pull pending deletions from the dashboard server.
@@ -654,6 +660,7 @@ fn main() -> Result<()> {
         Cmd::AutosyncEnable => autosync::cmd_enable(),
         Cmd::AutosyncDisable => autosync::cmd_disable(),
         Cmd::Recover => autosync::cmd_recover(),
+        Cmd::FixExitGame { apply } => fix_exit::cmd_fix_exit_game(apply),
         Cmd::Serve { bind } => fileserver::cmd_serve(&bind),
     }
 }

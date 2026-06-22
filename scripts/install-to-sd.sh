@@ -215,6 +215,8 @@ EOF
 # tty mode → user sees colored output on the R36S screen
 # bg  mode → fire-and-forget background job, dashboard tracks
 write_port "Doctor"          "doctor"                            30    tty
+write_port "Fix Exit-Game"   "fix-exit-game --apply"             60    tty
+write_port "Check Exit-Game" "fix-exit-game"                     30    tty
 write_port "Hardware"        "hardware snapshot --pretty --save" 30    tty
 write_port "Scan ROMs"       "scan"                              300   tty
 write_port "Extract ROMs"    "extract-roms"                      600   tty
@@ -312,6 +314,8 @@ EOF
 desc_for() {
     case "$1" in
         "Doctor") echo "Health check: storage, server, tools, RetroArch, autosync — full report on screen.";;
+        "Fix Exit-Game") echo "Patch retroarch.cfg to fix the Select+Start exit-freeze on R36S: video_threaded, audio_driver=alsathread, pause_nonactive, quit combo. Backs up first. Reboot to apply.";;
+        "Check Exit-Game") echo "Show which retroarch.cfg settings would be changed by Fix Exit-Game. Dry run, no writes.";;
         "Hardware") echo "Show CPU/RAM/kernel/panel/disk/WiFi on screen and sync the snapshot to the dashboard.";;
         "Quick Sync") echo "Background: diagnostic + hardware snapshot + sync. Quick way to push state to the hub.";;
         "Scan ROMs") echo "Index every ROM in /roms. Incremental: re-runs skip files that haven't changed.";;
