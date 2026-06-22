@@ -219,6 +219,7 @@ write_port "Cloud Setup"     "cloud setup"              600   tty
 write_port "Cloud Backup"    "cloud backup"             1200  bg
 write_port "Cloud Restore"   "cloud restore"            1200  bg
 write_port "Cloud Status"    "cloud status"             10    tty
+write_port "Cloud Catalog"   "cloud catalog"            300   tty
 write_port "Kodi Setup"      "kodi setup"               60    tty
 write_port "Update"          "self-update"              180   tty
 write_port "File Browser"    "serve"                    none  bg
@@ -412,6 +413,7 @@ desc_for() {
         "Cloud Backup") echo "Background: sync /roms/savestates and /roms/.playora to gdrive:R36S. Long-running.";;
         "Cloud Restore") echo "Background: pull savestates + config from gdrive:R36S back to the SD.";;
         "Cloud Status") echo "Print rclone version + configured remotes.";;
+        "Cloud Catalog") echo "Refresh the cloud ROM catalog from gdrive (lsjson + post). Lets the dashboard show every ROM you own across systems with one-click Download.";;
         "Kodi Setup") echo "Enable curated Kodi addons (YouTube, Jellyfin, IPTV Simple, IAGL) via JSON-RPC.";;
         "Update") echo "Self-update the agent from the GitHub release.";;
         "Autosync Status") echo "Show the autosync service status, pending events, and last sync time.";;

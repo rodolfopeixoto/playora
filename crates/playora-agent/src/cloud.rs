@@ -300,6 +300,77 @@ pub fn cmd_restore() -> Result<()> {
     Ok(())
 }
 
+pub fn cmd_catalog() -> Result<()> {
+    let _lock = crate::lockfile::acquire("cloud-catalog")?;
+    let cfg = crate::cfg::load(None)?;
+    ensure_rclone()?;
+    println!("== Cloud Catalog refresh ==");
+    let bin = rclone_bin();
+    let rc_cfg = rclone_config();
+    let remote = format!("{REMOTE}:{REMOTE_ROOT}/roms");
+    println!("listing {remote}...");
+    let out = Command::new(&bin)
+        .args(["lsjson", "--recursive", "--files-only", "--config"])
+        .arg(&rc_cfg)
+        .arg(&remote)
+        .output()?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(anyhow!("rclone lsjson failed: {err}"));
+    }
+    let body = String::from_utf8_lossy(&out.stdout).to_string();
+    let count = body.matches("\"Path\"").count();
+    println!("found {count} files");
+    let url = format!(
+        "{}/api/v1/devices/{}/cloud-catalog",
+        cfg.server_url.trim_end_matches('/'),
+        cfg.device_id.0
+    );
+    let resp = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()?
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()?;
+    if !resp.status().is_success() {
+        return Err(anyhow!("server HTTP {}", resp.status()));
+    }
+    println!();
+    println!("SUMMARY: Cloud Catalog ok ({count} entries posted)");
+    Ok(())
+}
+
+pub fn cmd_download(rel_path: &str) -> Result<()> {
+    let _lock = crate::lockfile::acquire("cloud-download")?;
+    ensure_rclone()?;
+    println!("== Cloud Download ==");
+    let bin = rclone_bin();
+    let rc_cfg = rclone_config();
+    let src = format!("{REMOTE}:{REMOTE_ROOT}/roms/{rel_path}");
+    let dst_dir = Path::new("/roms").join(
+        Path::new(rel_path)
+            .parent()
+            .unwrap_or_else(|| Path::new("")),
+    );
+    std::fs::create_dir_all(&dst_dir).ok();
+    println!("--> {src}");
+    println!("    {}/", dst_dir.display());
+    let st = Command::new(&bin)
+        .args(["copy", "--config"])
+        .arg(&rc_cfg)
+        .arg(&src)
+        .arg(&dst_dir)
+        .args(["--stats=5s", "--stats-one-line", "--transfers=2"])
+        .status()?;
+    if !st.success() {
+        return Err(anyhow!("rclone copy failed"));
+    }
+    println!();
+    println!("SUMMARY: Cloud Download ok — {rel_path}");
+    Ok(())
+}
+
 pub fn cmd_status() -> Result<()> {
     ensure_rclone()?;
     println!("== Cloud Status ==");

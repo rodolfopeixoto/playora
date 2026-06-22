@@ -92,6 +92,26 @@ async fn main() -> Result<()> {
             get(dashboard::cloud_setup_page).post(dashboard::cloud_setup_submit),
         )
         .route(
+            "/api/v1/devices/:id/cloud-catalog",
+            get(routes::cloud_catalog_list).post(routes::cloud_catalog_post),
+        )
+        .route(
+            "/api/v1/devices/:id/cloud-download",
+            post(routes::cloud_download_request),
+        )
+        .route(
+            "/api/v1/devices/:id/cloud-download-pending",
+            get(routes::cloud_download_pending),
+        )
+        .route(
+            "/api/v1/devices/:id/cloud-download-ack",
+            post(routes::cloud_download_ack),
+        )
+        .route(
+            "/dashboard/cloud-roms/:id",
+            get(dashboard::cloud_roms_page).post(dashboard::cloud_download_form),
+        )
+        .route(
             "/dashboard/device/:id/delete-rom",
             post(dashboard::delete_rom_form),
         )

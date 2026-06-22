@@ -23,7 +23,17 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const ALLOWED_ROOTS: &[&str] = &["/roms", "/boot", "/userdata", "/home", "/tmp"];
+const ALLOWED_ROOTS: &[&str] = &[
+    "/roms",
+    "/boot",
+    "/userdata",
+    "/home",
+    "/tmp",
+    "/opt",
+    "/etc",
+    "/var",
+    "/run",
+];
 
 #[derive(Clone)]
 struct AppState {}

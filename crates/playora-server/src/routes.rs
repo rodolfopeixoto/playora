@@ -564,6 +564,121 @@ pub async fn cloud_auth_fetch(
     }
 }
 
+pub async fn cloud_catalog_post(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+    body: String,
+) -> StatusCode {
+    let entries: Vec<Value> = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+    let conn = state.lock().await;
+    let _ = conn.execute(
+        "DELETE FROM cloud_catalog WHERE device_id=?1",
+        rusqlite::params![device_id],
+    );
+    let now = Utc::now().to_rfc3339();
+    for e in &entries {
+        let rel = e.get("Path").and_then(|v| v.as_str()).unwrap_or("");
+        if rel.is_empty() {
+            continue;
+        }
+        let size = e.get("Size").and_then(|v| v.as_i64()).unwrap_or(0);
+        let name = e.get("Name").and_then(|v| v.as_str()).unwrap_or(rel);
+        // First path component is the system folder.
+        let system = rel.split('/').next().unwrap_or("");
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO cloud_catalog(device_id, rel_path, system, name, size, received_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![device_id, rel, system, name, size, now],
+        );
+    }
+    StatusCode::OK
+}
+
+pub async fn cloud_catalog_list(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+) -> Json<Vec<Value>> {
+    let conn = state.lock().await;
+    let mut stmt = conn
+        .prepare(
+            "SELECT rel_path, system, name, size FROM cloud_catalog WHERE device_id=?1 ORDER BY system, name",
+        )
+        .unwrap();
+    let rows = stmt
+        .query_map([device_id], |r| {
+            Ok(serde_json::json!({
+                "rel_path": r.get::<_, String>(0)?,
+                "system": r.get::<_, String>(1)?,
+                "name": r.get::<_, String>(2)?,
+                "size": r.get::<_, i64>(3)?,
+            }))
+        })
+        .unwrap();
+    Json(rows.flatten().collect())
+}
+
+#[derive(Deserialize)]
+pub struct CloudDownloadRequest {
+    pub rel_path: String,
+}
+
+pub async fn cloud_download_request(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+    Json(req): Json<CloudDownloadRequest>,
+) -> StatusCode {
+    let conn = state.lock().await;
+    let _ = conn.execute(
+        "INSERT INTO cloud_download_requests(device_id, rel_path, status, requested_at) VALUES (?1, ?2, 'pending', ?3)",
+        rusqlite::params![device_id, req.rel_path, Utc::now().to_rfc3339()],
+    );
+    StatusCode::ACCEPTED
+}
+
+pub async fn cloud_download_pending(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+) -> Json<Vec<Value>> {
+    let conn = state.lock().await;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, rel_path FROM cloud_download_requests WHERE device_id=?1 AND status='pending' ORDER BY id",
+        )
+        .unwrap();
+    let rows = stmt
+        .query_map([device_id], |r| {
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(0)?,
+                "rel_path": r.get::<_, String>(1)?,
+            }))
+        })
+        .unwrap();
+    Json(rows.flatten().collect())
+}
+
+#[derive(Deserialize)]
+pub struct CloudDownloadAck {
+    pub rel_path: String,
+    pub status: String,
+    #[serde(default)]
+    pub error: String,
+}
+
+pub async fn cloud_download_ack(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+    Json(req): Json<CloudDownloadAck>,
+) -> StatusCode {
+    let conn = state.lock().await;
+    let _ = conn.execute(
+        "UPDATE cloud_download_requests SET status=?3, processed_at=?4, error=?5 WHERE device_id=?1 AND rel_path=?2 AND status='pending'",
+        rusqlite::params![device_id, req.rel_path, req.status, Utc::now().to_rfc3339(), req.error],
+    );
+    StatusCode::OK
+}
+
 pub async fn restore_progress_latest(AxState(state): AxState<State>) -> Json<Value> {
     let conn = state.lock().await;
     let v: Option<Value> = conn.query_row(

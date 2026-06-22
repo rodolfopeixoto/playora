@@ -225,6 +225,10 @@ enum CloudCmd {
     Restore,
     /// Print rclone status (configured remotes, last error)
     Status,
+    /// Refresh cloud ROM catalog (rclone lsjson → post to dashboard)
+    Catalog,
+    /// Download one ROM from gdrive (path relative to gdrive:R36S/roms/)
+    Download { rel_path: String },
 }
 
 #[derive(Subcommand)]
@@ -629,6 +633,8 @@ fn main() -> Result<()> {
             CloudCmd::Backup => cloud::cmd_backup(),
             CloudCmd::Restore => cloud::cmd_restore(),
             CloudCmd::Status => cloud::cmd_status(),
+            CloudCmd::Catalog => cloud::cmd_catalog(),
+            CloudCmd::Download { rel_path } => cloud::cmd_download(&rel_path),
         },
         Cmd::Cleanup { from_server } => {
             let cfg = load_cfg(cli.config.as_deref())?;

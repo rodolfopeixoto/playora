@@ -131,6 +131,135 @@ winget install Rclone.Rclone  # Windows</pre>
     Html(html)
 }
 
+#[derive(Deserialize)]
+pub struct CloudDownloadForm {
+    pub rel_path: String,
+}
+
+pub async fn cloud_download_form(
+    AxState(state): AxState<State>,
+    AxPath(device_id): AxPath<String>,
+    Form(form): Form<CloudDownloadForm>,
+) -> Redirect {
+    let conn = state.lock().await;
+    let _ = conn.execute(
+        "INSERT INTO cloud_download_requests(device_id, rel_path, status, requested_at) VALUES (?1, ?2, 'pending', ?3)",
+        rusqlite::params![device_id, form.rel_path, chrono::Utc::now().to_rfc3339()],
+    );
+    Redirect::to(&format!("/dashboard/cloud-roms/{device_id}?queued=1"))
+}
+
+pub async fn cloud_roms_page(
+    AxState(state): AxState<State>,
+    AxPath(device_id): AxPath<String>,
+) -> Html<String> {
+    let conn = state.lock().await;
+    // Load catalog grouped by system.
+    let mut stmt = conn
+        .prepare(
+            "SELECT rel_path, system, name, size FROM cloud_catalog WHERE device_id=?1 ORDER BY system, name",
+        )
+        .unwrap();
+    let rows = stmt
+        .query_map([device_id.clone()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })
+        .unwrap();
+
+    let mut by_system: std::collections::BTreeMap<String, Vec<(String, String, i64)>> =
+        std::collections::BTreeMap::new();
+    for (rel, sys, name, size) in rows.flatten() {
+        by_system.entry(sys).or_default().push((rel, name, size));
+    }
+
+    // Pending download queue.
+    let mut pend = std::collections::BTreeMap::<String, String>::new();
+    let mut stmt = conn
+        .prepare(
+            "SELECT rel_path, status FROM cloud_download_requests WHERE device_id=?1 ORDER BY id DESC",
+        )
+        .unwrap();
+    for r in stmt
+        .query_map([device_id.clone()], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .unwrap()
+        .flatten()
+    {
+        pend.entry(r.0).or_insert(r.1);
+    }
+
+    let mut sections = String::new();
+    if by_system.is_empty() {
+        sections.push_str(
+            "<p class=\"sub muted\">Catalog empty. On the device run <code>Ports → Playora Cloud Catalog</code> (or wait for nightly refresh).</p>",
+        );
+    }
+    for (sys, items) in &by_system {
+        sections.push_str(&format!(
+            "<h2>{} <span class=\"muted\">({} ROMs)</span></h2><table><thead><tr><th>Name</th><th>Size</th><th>Status</th><th></th></tr></thead><tbody>",
+            esc(sys),
+            items.len()
+        ));
+        for (rel, name, size) in items {
+            let status = pend.get(rel).cloned().unwrap_or_default();
+            let pill_class = match status.as_str() {
+                "ok" => "pill ok",
+                "fail" => "pill err",
+                "pending" => "pill warn",
+                _ => "pill",
+            };
+            let pill_text = if status.is_empty() {
+                String::from("cloud only")
+            } else {
+                status
+            };
+            let action = format!(
+                r#"<form method="post" action="/dashboard/cloud-roms/{did}" style="display:inline">
+                    <input type="hidden" name="rel_path" value="{path}">
+                    <button class="dl" type="submit">Download</button>
+                </form>"#,
+                did = esc(&device_id),
+                path = esc(rel)
+            );
+            sections.push_str(&format!(
+                "<tr><td>{}</td><td class=\"muted\">{:.1} MB</td><td><span class=\"{}\">{}</span></td><td>{}</td></tr>",
+                esc(name),
+                *size as f64 / 1024.0 / 1024.0,
+                pill_class,
+                esc(&pill_text),
+                action
+            ));
+        }
+        sections.push_str("</tbody></table>");
+    }
+
+    Html(format!(
+        r#"<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cloud ROMs · Playora</title>
+<meta http-equiv="refresh" content="30">
+<style>{css}
+.pill.ok{{background:#0f2818;color:#5fbf76}}.pill.warn{{background:#2a1f0a;color:#d4a648}}.pill.err{{background:#2a0f0f;color:#d65656}}
+button.dl{{background:#1a3d5c;color:#7c9eff;border:1px solid #2a5078;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:11px}}
+button.dl:hover{{background:#234e75}}
+</style></head>
+<body><div class="wrap">
+{hdr}
+<h1>Cloud ROMs</h1>
+<p class="sub">Device <code>{did}</code> · Click Download to queue. Agent picks it up within 60 s and runs <code>rclone copy gdrive:R36S/roms/&lt;name&gt; /roms/&lt;system&gt;/</code>.</p>
+{sections}
+</div></body></html>"#,
+        css = CSS,
+        hdr = header("devices"),
+        did = esc(&device_id),
+    ))
+}
+
 pub async fn delete_rom_form(
     AxState(state): AxState<State>,
     AxPath(device_id): AxPath<String>,
@@ -890,9 +1019,13 @@ pub async fn device_page(
 
     let fs_block = match last_ip.as_deref().filter(|s| !s.is_empty()) {
         Some(ip) => format!(
-            r#"<p class="sub">Last LAN IP: <code>{ip}</code> · <a href="http://{ip}:7878/" target="_blank" class="open-fs">Open File Browser →</a> <span class="muted">(start it on device with <code>Ports → Playora File Browser</code>)</span></p>"#
+            r#"<p class="sub">Last LAN IP: <code>{ip}</code> · <a href="http://{ip}:7878/" target="_blank" class="open-fs">Open File Browser →</a> · <a href="/dashboard/cloud-roms/{did}">Cloud ROMs →</a> <span class="muted">(file browser needs <code>Ports → Playora File Browser</code> first)</span></p>"#,
+            did = esc(&id)
         ),
-        None => "<p class=\"sub muted\">No LAN IP recorded yet — heartbeat once for the file browser link to appear.</p>".to_string(),
+        None => format!(
+            "<p class=\"sub muted\">No LAN IP recorded yet. <a href=\"/dashboard/cloud-roms/{}\">Cloud ROMs →</a></p>",
+            esc(&id)
+        ),
     };
 
     let title = match dev.as_ref() {

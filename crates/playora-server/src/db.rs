@@ -178,4 +178,25 @@ CREATE TABLE IF NOT EXISTS cloud_auth_tokens (
     consumed_at TEXT,
     received_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS cloud_catalog (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    system TEXT,
+    name TEXT,
+    size INTEGER,
+    received_at TEXT NOT NULL,
+    UNIQUE(device_id, rel_path)
+);
+CREATE INDEX IF NOT EXISTS cloud_catalog_dev_sys ON cloud_catalog(device_id, system);
+CREATE TABLE IF NOT EXISTS cloud_download_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    requested_at TEXT NOT NULL,
+    processed_at TEXT,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS cloud_dl_dev_status ON cloud_download_requests(device_id, status);
 "#;

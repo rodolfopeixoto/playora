@@ -148,6 +148,8 @@ pub fn cmd_run(cfg: AgentConfig) -> Result<()> {
         sessions.tick(&cfg);
         // Pull dashboard delete queue + apply.
         let _ = crate::cleanup::cmd_cleanup(cfg.clone(), true);
+        // Pull cloud-download queue + apply.
+        let _ = poll_cloud_downloads(&cfg);
         // Scheduled jobs.
         sched.tick(&cfg);
         std::thread::sleep(Duration::from_secs(cfg.sync_interval_seconds as u64));
@@ -189,6 +191,48 @@ impl Scheduler {
             }
         }
     }
+}
+
+fn poll_cloud_downloads(cfg: &AgentConfig) -> anyhow::Result<()> {
+    let url = format!(
+        "{}/api/v1/devices/{}/cloud-download-pending",
+        cfg.server_url.trim_end_matches('/'),
+        cfg.device_id.0
+    );
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()?;
+    let resp = client.get(&url).send()?;
+    if !resp.status().is_success() {
+        return Ok(());
+    }
+    let entries: Vec<serde_json::Value> = resp.json().unwrap_or_default();
+    for e in entries {
+        let rel = match e.get("rel_path").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        println!("[cloud-download] processing {rel}");
+        let result = crate::cloud::cmd_download(&rel);
+        let (status, err) = match &result {
+            Ok(_) => ("ok".to_string(), String::new()),
+            Err(e) => ("fail".to_string(), e.to_string()),
+        };
+        let ack_url = format!(
+            "{}/api/v1/devices/{}/cloud-download-ack",
+            cfg.server_url.trim_end_matches('/'),
+            cfg.device_id.0
+        );
+        let _ = client
+            .post(&ack_url)
+            .json(&serde_json::json!({
+                "rel_path": rel,
+                "status": status,
+                "error": err,
+            }))
+            .send();
+    }
+    Ok(())
 }
 
 fn run_inhibited(label: &str, args: &[&str], cfg: &AgentConfig) {
