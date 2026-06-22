@@ -233,10 +233,45 @@ fn save_qr_png(qr: &QrCode, path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn preflight(action: &str) -> Result<()> {
+    use crate::ttyui::{self, Status};
+    ttyui::header(&format!("Cloud {action}"));
+    ttyui::section("Pre-flight");
+    if !crate::sync::online() {
+        ttyui::row("network", "no WiFi", Status::Fail);
+        println!();
+        println!("SUMMARY: Cloud {action} skipped — connect WiFi and try again.");
+        anyhow::bail!("offline");
+    }
+    ttyui::row("network", "connected", Status::Ok);
+    if let Err(e) = ensure_rclone() {
+        ttyui::row("rclone", "missing", Status::Fail);
+        println!();
+        println!("SUMMARY: {e}");
+        return Err(e);
+    }
+    ttyui::row("rclone", "ok", Status::Ok);
+    let cfg = rclone_config();
+    if !cfg.exists()
+        || !std::fs::read_to_string(&cfg)
+            .unwrap_or_default()
+            .contains("[gdrive]")
+    {
+        ttyui::row("gdrive remote", "not configured", Status::Warn);
+        println!();
+        println!("Run Ports → Playora Cloud Setup first.");
+        println!("SUMMARY: Cloud {action} skipped — gdrive remote not configured.");
+        anyhow::bail!("rclone.conf missing gdrive remote");
+    }
+    ttyui::row("gdrive remote", "configured", Status::Ok);
+    Ok(())
+}
+
 pub fn cmd_backup() -> Result<()> {
     let _lock = crate::lockfile::acquire("cloud-backup")?;
-    ensure_rclone()?;
-    println!("== Cloud Backup ==");
+    if preflight("Backup").is_err() {
+        return Ok(());
+    }
     let bin = rclone_bin();
     let cfg = rclone_config();
     let mut total_files = 0u64;
@@ -248,16 +283,21 @@ pub fn cmd_backup() -> Result<()> {
         ("/roms/.playora", format!("{REMOTE}:{REMOTE_ROOT}/playora")),
     ] {
         if !Path::new(src).exists() {
-            println!("skip {src} (missing)");
+            println!("  skip {src} (missing)");
             continue;
         }
-        println!("--> {src} -> {dst}");
+        crate::ttyui::section(&format!("Syncing {src}"));
         let st = Command::new(&bin)
             .args(["sync", "--config"])
             .arg(&cfg)
             .arg(src)
             .arg(&dst)
-            .args(["--stats=10s", "--stats-one-line", "--transfers=4"])
+            .args([
+                "--stats=5s",
+                "--stats-one-line",
+                "--transfers=4",
+                "--verbose",
+            ])
             .status()?;
         if !st.success() {
             return Err(anyhow!("rclone sync failed for {src}"));
@@ -265,14 +305,16 @@ pub fn cmd_backup() -> Result<()> {
         total_files += count_files(Path::new(src));
     }
     println!();
+    println!("\x1b[1;32m  ✓ DONE\x1b[0m");
     println!("SUMMARY: Cloud Backup ok ({total_files} source files)");
     Ok(())
 }
 
 pub fn cmd_restore() -> Result<()> {
     let _lock = crate::lockfile::acquire("cloud-restore")?;
-    ensure_rclone()?;
-    println!("== Cloud Restore ==");
+    if preflight("Restore").is_err() {
+        return Ok(());
+    }
     let bin = rclone_bin();
     let cfg = rclone_config();
     for (dst, src) in [
@@ -283,19 +325,20 @@ pub fn cmd_restore() -> Result<()> {
         ("/roms/.playora", format!("{REMOTE}:{REMOTE_ROOT}/playora")),
     ] {
         std::fs::create_dir_all(dst).ok();
-        println!("--> {src} -> {dst}");
+        crate::ttyui::section(&format!("Pulling {src} -> {dst}"));
         let st = Command::new(&bin)
             .args(["copy", "--config"])
             .arg(&cfg)
             .arg(&src)
             .arg(dst)
-            .args(["--stats=10s", "--stats-one-line"])
+            .args(["--stats=5s", "--stats-one-line", "--verbose"])
             .status()?;
         if !st.success() {
             return Err(anyhow!("rclone copy failed for {src}"));
         }
     }
     println!();
+    println!("\x1b[1;32m  ✓ DONE\x1b[0m");
     println!("SUMMARY: Cloud Restore ok");
     Ok(())
 }

@@ -215,8 +215,8 @@ write_port "Compress ROMs"   "compress-roms"                     1800  tty
 write_port "Restore Backup"  "restore-tar"                       none  tty
 write_port "Cleanup"         "cleanup"                           120   tty
 write_port "Cloud Setup"     "cloud setup"                       600   tty
-write_port "Cloud Backup"    "cloud backup"                      1200  bg
-write_port "Cloud Restore"   "cloud restore"                     1200  bg
+write_port "Cloud Backup"    "cloud backup"                      1200  tty
+write_port "Cloud Restore"   "cloud restore"                     1200  tty
 write_port "Cloud Catalog"   "cloud catalog"                     300   tty
 write_port "Kodi Setup"      "kodi setup"                        60    tty
 write_port "Update"          "self-update"                       180   tty
@@ -439,11 +439,40 @@ write_gamelist() {
   </game>
 XML
     done
+    # Hide non-Playora ports (PortMaster, Counter-Strike, etc) from this menu
+    # so the user sees only the Playora entries on the Ports tab.
+    for sh in "${out_dir}"/*.sh; do
+        [ -f "$sh" ] || continue
+        base="$(basename "$sh")"
+        case "$base" in
+            Playora\ *) continue ;;
+        esac
+        cat >> "$gl" <<XML
+  <game>
+    <path>./${base}</path>
+    <hidden>true</hidden>
+  </game>
+XML
+    done
     echo '</gameList>' >> "$gl"
     echo "[install] wrote $gl"
 }
 
 write_gamelist "$PORTS_DIR"
+
+# Mark Counter-Strike (PortMaster entry) hidden in the existing legacy
+# /roms/ports/gamelist.xml so ES doesn't list it in the same view as Playora.
+# Only edits if the entry is present.
+LEGACY_GL="$PORTS_DIR/gamelist.xml.legacy"
+if [ -f "$PORTS_DIR/gamelist.xml.bak" ]; then
+    LEGACY_GL="$PORTS_DIR/gamelist.xml.bak"
+fi
+# Some firmwares write a parallel gamelist for ES. Our write_gamelist
+# wrote a fresh one above; persist a sidecar hiding Counter-Strike.sh
+# so future re-merges keep it hidden.
+cat > "$PORTS_DIR/.playora-hidden" <<'EOF'
+Counter-Strike.sh
+EOF
 
 # Clean up any leftover /roms/playora/ mirror + es_systems.cfg edits from v0.2.
 # Playora lives in /roms/ports/ like PortMaster / ThemeMaster.

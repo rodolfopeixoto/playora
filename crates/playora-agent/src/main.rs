@@ -16,6 +16,7 @@ mod hw;
 mod kodi;
 mod launcher;
 mod lockfile;
+mod metadata;
 mod myrient;
 mod portmaster;
 mod resources;
