@@ -72,14 +72,9 @@ pub fn cmd_install_main_menu() -> Result<()> {
     }
     std::fs::remove_file(&tmp).ok();
 
-    ttyui::section("Restarting EmulationStation");
-    let _ = Command::new("sudo")
-        .args(["systemctl", "restart", "emulationstation"])
-        .status();
-    ttyui::ok("ES restart requested — Main Menu should now show the Playora tile.");
-
+    ttyui::ok("Playora system registered. ES will restart in a moment and the Main Menu tile will appear.");
     println!();
-    println!("SUMMARY: Main Menu tile installed");
+    println!("SUMMARY: Main Menu tile installed (port-runner will restart ES on exit)");
     Ok(())
 }
 

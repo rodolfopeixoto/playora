@@ -1575,7 +1575,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "playora-agent"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1615,7 +1615,7 @@ dependencies = [
 
 [[package]]
 name = "playora-common"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "serde",
@@ -1626,7 +1626,7 @@ dependencies = [
 
 [[package]]
 name = "playora-server"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "axum",

@@ -109,39 +109,104 @@ struct Detected {
     core: Option<String>,
 }
 
-/// Scan running RetroArch processes and extract the loaded ROM.
+/// Scan running emulator processes (retroarch, mupen64plus, ppsspp, mgba,
+/// drastic, dosbox, scummvm, …) and extract the loaded ROM from /proc.
 fn detect_running_rom() -> Option<Detected> {
-    let out = std::process::Command::new("pgrep")
-        .args(["-a", "-f", "retroarch"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines() {
-        // pgrep -a format: "<pid> <cmdline>"
-        let cmdline = line.splitn(2, ' ').nth(1).unwrap_or("");
-        if let Some(rom) = parse_rom_from_cmdline(cmdline) {
+    // Read /proc directly — works on every Linux even without busybox pgrep -a.
+    let procs = std::fs::read_dir("/proc").ok()?;
+    for entry in procs.flatten() {
+        let pid = match entry.file_name().to_string_lossy().parse::<u32>() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let cmdline_raw = match std::fs::read(format!("/proc/{pid}/cmdline")) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        if cmdline_raw.is_empty() {
+            continue;
+        }
+        // /proc/<pid>/cmdline is NUL-separated.
+        let argv: Vec<String> = cmdline_raw
+            .split(|b| *b == 0)
+            .filter(|s| !s.is_empty())
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .collect();
+        if argv.is_empty() {
+            continue;
+        }
+        let exe = Path::new(&argv[0])
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if !is_emulator(&exe) {
+            continue;
+        }
+        let joined = argv.join(" ");
+        if let Some(rom) = parse_rom_from_cmdline(&joined) {
             let system_folder = Path::new(&rom)
                 .parent()
                 .and_then(|p| p.file_name())
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_string();
-            let core = parse_core_from_cmdline(cmdline);
             return Some(Detected {
                 rom_path: rom,
                 system_folder,
-                core,
+                core: parse_core_from_cmdline(&joined),
             });
         }
     }
     None
 }
 
+const EMU_NEEDLES: &[&str] = &[
+    "retroarch",
+    "mupen64plus",
+    "ppsspp",
+    "mgba",
+    "drastic",
+    "dosbox",
+    "scummvm",
+    "dolphin-emu",
+    "yuzu",
+    "citra",
+    "pcsx2",
+    "pcsx_rearmed",
+    "snes9x",
+    "fceux",
+    "vbam",
+    "gpsp",
+    "stella",
+    "duckstation",
+    "redream",
+    "flycast",
+];
+
+fn is_emulator(name: &str) -> bool {
+    EMU_NEEDLES.iter().any(|n| name.contains(n))
+}
+
+const ROM_EXTS: &[&str] = &[
+    ".nes", ".sfc", ".smc", ".gba", ".gb", ".gbc", ".n64", ".z64", ".v64", ".md", ".gen", ".smd",
+    ".bin", ".iso", ".chd", ".cso", ".cue", ".gdi", ".pbp", ".elf", ".nds", ".3ds", ".cdi", ".m3u",
+    ".zip", ".7z",
+];
+
 fn parse_rom_from_cmdline(cmd: &str) -> Option<String> {
-    // Heuristic: last token that looks like a /roms/<system>/<file> path.
+    // Pass 1: token that contains "/roms/" (most reliable).
     for token in cmd.split_whitespace().rev() {
         let unq = token.trim_matches('"').trim_matches('\'');
-        if unq.starts_with("/roms/") && std::path::Path::new(unq).exists() {
+        if unq.contains("/roms/") {
+            return Some(unq.to_string());
+        }
+    }
+    // Pass 2: any token whose lowercase ends in a known ROM extension.
+    for token in cmd.split_whitespace().rev() {
+        let unq = token.trim_matches('"').trim_matches('\'');
+        let lower = unq.to_lowercase();
+        if ROM_EXTS.iter().any(|e| lower.ends_with(e)) {
             return Some(unq.to_string());
         }
     }
@@ -181,19 +246,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_rom_path() {
-        // ROM path must exist for parse_rom_from_cmdline to return it.
-        let tmp = tempfile::tempdir().unwrap();
-        let rom = tmp.path().join("roms_subdir").join("game.gba");
-        std::fs::create_dir_all(rom.parent().unwrap()).unwrap();
-        std::fs::write(&rom, b"x").unwrap();
-        let fake_cmd = format!("retroarch -L /usr/lib/libretro/gba.so {}", rom.display());
-        // parse_rom_from_cmdline only matches /roms/ prefix — assert the heuristic stays strict.
-        assert_eq!(parse_rom_from_cmdline(&fake_cmd), None);
+    fn parses_rom_path_via_roms_prefix() {
+        let cmd = "retroarch -L /usr/lib/libretro/snes9x.so /roms/snes/Castlevania.smc";
+        assert_eq!(
+            parse_rom_from_cmdline(cmd),
+            Some("/roms/snes/Castlevania.smc".into())
+        );
+    }
 
-        let cmd2 = "retroarch -L /usr/lib/libretro/snes9x.so /roms/snes/Castlevania.smc";
-        // Path doesn't exist on dev host, so returns None — strict by design.
-        assert_eq!(parse_rom_from_cmdline(cmd2), None);
+    #[test]
+    fn parses_rom_path_via_extension_fallback() {
+        let cmd = "mupen64plus --corelib /opt/cores/mupen.so /mnt/data/games/Mario.z64";
+        assert_eq!(
+            parse_rom_from_cmdline(cmd),
+            Some("/mnt/data/games/Mario.z64".into())
+        );
+    }
+
+    #[test]
+    fn emulator_name_match() {
+        assert!(is_emulator("retroarch"));
+        assert!(is_emulator("retroarch-aarch64"));
+        assert!(is_emulator("ppsspp-sdl"));
+        assert!(!is_emulator("bash"));
     }
 
     #[test]
