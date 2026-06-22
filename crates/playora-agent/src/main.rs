@@ -205,6 +205,8 @@ enum Cmd {
         #[arg(long, default_value = "0.0.0.0:7878")]
         bind: String,
     },
+    /// Fetch missing game covers + metadata from TheGamesDB (best-effort, rate-limited)
+    FetchCovers,
     /// Process /roms/.playora/delete_queue.txt and (optionally) server delete-requests
     Cleanup {
         /// Also pull pending deletions from the dashboard server.
@@ -637,6 +639,10 @@ fn main() -> Result<()> {
         Cmd::Cleanup { from_server } => {
             let cfg = load_cfg(cli.config.as_deref())?;
             cleanup::cmd_cleanup(cfg, from_server)
+        }
+        Cmd::FetchCovers => {
+            let cfg = load_cfg(cli.config.as_deref())?;
+            metadata::cmd_fetch_covers(cfg)
         }
         Cmd::Serve { bind } => fileserver::cmd_serve(&bind),
     }

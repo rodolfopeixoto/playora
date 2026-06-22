@@ -218,6 +218,7 @@ write_port "Cloud Setup"     "cloud setup"                       600   tty
 write_port "Cloud Backup"    "cloud backup"                      1200  tty
 write_port "Cloud Restore"   "cloud restore"                     1200  tty
 write_port "Cloud Catalog"   "cloud catalog"                     300   tty
+write_port "Fetch Covers"    "fetch-covers"                      300   tty
 write_port "Kodi Setup"      "kodi setup"                        60    tty
 write_port "Update"          "self-update"                       180   tty
 
@@ -408,6 +409,7 @@ desc_for() {
         "Cloud Restore") echo "Background: pull savestates + config from gdrive:R36S back to the SD.";;
         "Cloud Status") echo "Print rclone version + configured remotes.";;
         "Cloud Catalog") echo "Refresh the cloud ROM catalog from gdrive (lsjson + post). Lets the dashboard show every ROM you own across systems with one-click Download.";;
+        "Fetch Covers") echo "Look up missing covers + metadata for every scanned ROM via TheGamesDB. Rate-limited to 50 per run. Re-run as needed.";;
         "Kodi Setup") echo "Enable curated Kodi addons (YouTube, Jellyfin, IPTV Simple, IAGL) via JSON-RPC.";;
         "Update") echo "Self-update the agent from the GitHub release. After it finishes, the new ports + features appear on next ES reload.";;
         "Autosync Enable") echo "Install + start the autosync systemd service so events sync continuously and the file browser + game-session tracker run in the background.";;

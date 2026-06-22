@@ -603,6 +603,42 @@ pub async fn devices_list_page(AxState(state): AxState<State>) -> Html<String> {
 
 pub async fn activity_page(AxState(state): AxState<State>) -> Html<String> {
     let conn = state.lock().await;
+    let mut running_banner = String::new();
+    let mut running_stmt = conn
+        .prepare(
+            "SELECT script, device_id, started_at, COALESCE(summary,'') FROM activities
+         WHERE status='running' ORDER BY id DESC LIMIT 10",
+        )
+        .unwrap();
+    let runs: Vec<(String, String, String, String)> = running_stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })
+        .unwrap()
+        .flatten()
+        .collect();
+    drop(running_stmt);
+    if !runs.is_empty() {
+        running_banner.push_str("<div class=\"running-banner\">");
+        running_banner.push_str(&format!("<strong>▶ {} running</strong>", runs.len()));
+        for (script, did, started, summary) in &runs {
+            running_banner.push_str(&format!(
+                "<div class=\"run-row\"><span class=\"pill warn\">{}</span> <span class=\"muted\">{} — started {} on <a href=\"/dashboard/device/{}\"><code>{}</code></a></span></div>",
+                esc(script),
+                esc(summary),
+                esc(&relative_time(started)),
+                esc(did),
+                esc(did)
+            ));
+        }
+        running_banner.push_str("</div>");
+    }
+
     let mut rows_html = String::new();
     let mut stmt = conn.prepare("SELECT id, device_id, script, status, started_at, COALESCE(ended_at,''), COALESCE(exit_code,-1), COALESCE(summary,'') FROM activities ORDER BY id DESC LIMIT 200").unwrap();
     let rows = stmt
@@ -644,7 +680,12 @@ pub async fn activity_page(AxState(state): AxState<State>) -> Html<String> {
             .push_str("<tr><td colspan=6 class=\"empty\">No menu activity recorded yet.</td></tr>");
     }
     let html = format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><title>Activity · Playora</title><meta http-equiv="refresh" content="10"><style>{css}.pill.ok{{background:#0f2818;color:#5fbf76}}.pill.warn{{background:#2a1f0a;color:#d4a648}}.pill.err{{background:#2a0f0f;color:#d65656}}</style></head><body><div class="wrap">{hdr}<h1>Activity</h1><p class="sub">Every menu click on the console shows up here within seconds. Click a script name to see its log tail.</p><table><thead><tr><th>Script</th><th>Status</th><th>Summary</th><th>Device</th><th>When</th><th></th></tr></thead><tbody>{rows_html}</tbody></table></div></body></html>"#,
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>Activity · Playora</title><meta http-equiv="refresh" content="10"><style>{css}
+.pill.ok{{background:#0f2818;color:#5fbf76}}.pill.warn{{background:#2a1f0a;color:#d4a648}}.pill.err{{background:#2a0f0f;color:#d65656}}
+.running-banner{{background:linear-gradient(90deg,#1a3d5c,#2a1f0a);border:1px solid #2a5078;border-radius:10px;padding:14px;margin:14px 0;font-size:13px}}
+.running-banner strong{{display:block;margin-bottom:8px;color:#7c9eff}}
+.running-banner .run-row{{margin-top:6px}}
+</style></head><body><div class="wrap">{hdr}<h1>Activity</h1>{running_banner}<p class="sub">Every menu click on the console shows up here within seconds. Click a script name to see its log tail.</p><table><thead><tr><th>Script</th><th>Status</th><th>Summary</th><th>Device</th><th>When</th><th></th></tr></thead><tbody>{rows_html}</tbody></table></div></body></html>"#,
         css = CSS,
         hdr = header("activity")
     );
@@ -713,12 +754,67 @@ pub async fn activity_detail_page(
     Html(html)
 }
 
+pub async fn games_by_system_page(
+    AxState(state): AxState<State>,
+    AxPath(system): AxPath<String>,
+) -> Html<String> {
+    games_render(state, Some(system)).await
+}
+
 pub async fn games_list_page(AxState(state): AxState<State>) -> Html<String> {
+    games_render(state, None).await
+}
+
+async fn games_render(state: State, filter_system: Option<String>) -> Html<String> {
     let conn = state.lock().await;
-    let mut rows_html = String::new();
-    let mut stmt = conn
+    let mut systems_html = String::new();
+    let all_cls = if filter_system.is_none() {
+        "pill ok"
+    } else {
+        "pill"
+    };
+    systems_html.push_str(&format!(
+        r#"<a href="/dashboard/games" class="{all_cls}" style="margin-right:6px;text-decoration:none">All</a>"#
+    ));
+    let mut sys_stmt = conn
         .prepare(
-            "SELECT s.system, s.game_name, COUNT(*), SUM(s.duration_seconds), MAX(s.started_at),
+            "SELECT system, COUNT(DISTINCT game_name) FROM game_sessions
+             WHERE system IS NOT NULL GROUP BY system ORDER BY 2 DESC",
+        )
+        .unwrap();
+    let sys_rows: Vec<(String, i64)> = sys_stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .unwrap()
+        .flatten()
+        .collect();
+    drop(sys_stmt);
+    for (sys, n) in &sys_rows {
+        let cls = if filter_system.as_deref() == Some(sys.as_str()) {
+            "pill ok"
+        } else {
+            "pill"
+        };
+        systems_html.push_str(&format!(
+            r#"<a href="/dashboard/games/{}" class="{cls}" style="margin-right:6px;text-decoration:none">{} ({n})</a>"#,
+            esc(sys),
+            esc(sys)
+        ));
+    }
+
+    let mut rows_html = String::new();
+    let sql = if filter_system.is_some() {
+        "SELECT s.system, s.game_name, COUNT(*), SUM(s.duration_seconds), MAX(s.started_at),
+                COALESCE(m.cover_url,''), COALESCE(m.year,''), COALESCE(m.genre,''),
+                COALESCE(m.display_name, s.game_name)
+         FROM game_sessions s
+         LEFT JOIN game_metadata m
+           ON m.system = s.system
+          AND m.name_query = REPLACE(s.game_name,'_',' ')
+         WHERE s.game_name IS NOT NULL AND s.system = ?1
+         GROUP BY s.system, s.game_name
+         ORDER BY 4 DESC"
+    } else {
+        "SELECT s.system, s.game_name, COUNT(*), SUM(s.duration_seconds), MAX(s.started_at),
                 COALESCE(m.cover_url,''), COALESCE(m.year,''), COALESCE(m.genre,''),
                 COALESCE(m.display_name, s.game_name)
          FROM game_sessions s
@@ -727,25 +823,41 @@ pub async fn games_list_page(AxState(state): AxState<State>) -> Html<String> {
           AND m.name_query = REPLACE(s.game_name,'_',' ')
          WHERE s.game_name IS NOT NULL
          GROUP BY s.system, s.game_name
-         ORDER BY 4 DESC",
-        )
-        .unwrap();
-    let rows = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, String>(4).unwrap_or_default(),
-                r.get::<_, String>(5)?,
-                r.get::<_, String>(6)?,
-                r.get::<_, String>(7)?,
-                r.get::<_, String>(8)?,
-            ))
-        })
-        .unwrap();
-    for (sys, game, n, dur, last, cover, year, genre, display) in rows.flatten() {
+         ORDER BY 4 DESC"
+    };
+    let mut stmt = conn.prepare(sql).unwrap();
+    let map_row = |r: &rusqlite::Row| -> rusqlite::Result<(
+        String,
+        String,
+        i64,
+        i64,
+        String,
+        String,
+        String,
+        String,
+        String,
+    )> {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, String>(4).unwrap_or_default(),
+            r.get::<_, String>(5)?,
+            r.get::<_, String>(6)?,
+            r.get::<_, String>(7)?,
+            r.get::<_, String>(8)?,
+        ))
+    };
+    let collected: Vec<_> = if let Some(sys) = filter_system.as_ref() {
+        stmt.query_map([sys.as_str()], map_row)
+            .unwrap()
+            .flatten()
+            .collect()
+    } else {
+        stmt.query_map([], map_row).unwrap().flatten().collect()
+    };
+    for (sys, game, n, dur, last, cover, year, genre, display) in collected {
         let cover_cell = if cover.is_empty() {
             "<div class=\"cover-fallback\">🎮</div>".to_string()
         } else {
@@ -778,12 +890,17 @@ pub async fn games_list_page(AxState(state): AxState<State>) -> Html<String> {
     if rows_html.is_empty() {
         rows_html.push_str("<tr><td colspan=6 class=\"empty\">No games tracked yet. Open a ROM from EmulationStation — the agent will pick it up within 60 s.</td></tr>");
     }
+    let title = match &filter_system {
+        Some(s) => format!("Games · {}", esc(s)),
+        None => "Games".to_string(),
+    };
     let html = format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><title>Games · Playora</title><style>{css}
 .cover-cell{{width:64px;padding:6px}}
 .cover{{width:48px;height:64px;object-fit:cover;border-radius:4px;display:block}}
 .cover-fallback{{width:48px;height:64px;background:#1a1a22;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:24px}}
-</style></head><body><div class="wrap">{hdr}<h1>Games</h1><table><thead><tr><th></th><th>Game</th><th>System</th><th>Sessions</th><th>Total time</th><th>Last played</th></tr></thead><tbody>{rows_html}</tbody></table></div></body></html>"#,
+.pill.ok{{background:#0f2818;color:#5fbf76}}
+</style></head><body><div class="wrap">{hdr}<h1>{title}</h1><p class="sub">{systems_html}</p><table><thead><tr><th></th><th>Game</th><th>System</th><th>Sessions</th><th>Total time</th><th>Last played</th></tr></thead><tbody>{rows_html}</tbody></table></div></body></html>"#,
         css = CSS,
         hdr = header("games")
     );
