@@ -199,4 +199,12 @@ CREATE TABLE IF NOT EXISTS cloud_download_requests (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS cloud_dl_dev_status ON cloud_download_requests(device_id, status);
+CREATE TABLE IF NOT EXISTS update_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    requested_at TEXT NOT NULL,
+    processed_at TEXT,
+    result TEXT
+);
 "#;

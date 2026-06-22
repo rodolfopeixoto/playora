@@ -40,6 +40,7 @@ libc = "0.2"
 axum = { version = "0.7", features = ["json", "macros", "multipart"] }
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["io"] }
+rand = "0.8"
 tower-http = { workspace = true, features = ["fs", "cors"] }
 
 [dev-dependencies]

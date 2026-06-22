@@ -679,6 +679,57 @@ pub async fn cloud_download_ack(
     StatusCode::OK
 }
 
+pub async fn update_request(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+) -> StatusCode {
+    let conn = state.lock().await;
+    let _ = conn.execute(
+        "INSERT INTO update_requests(device_id, status, requested_at) VALUES (?1, 'pending', ?2)",
+        rusqlite::params![device_id, Utc::now().to_rfc3339()],
+    );
+    StatusCode::ACCEPTED
+}
+
+pub async fn update_pending(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+) -> Json<Vec<Value>> {
+    let conn = state.lock().await;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id FROM update_requests WHERE device_id=?1 AND status='pending' ORDER BY id",
+        )
+        .unwrap();
+    let rows = stmt
+        .query_map([device_id], |r| {
+            Ok(serde_json::json!({"id": r.get::<_, i64>(0)?}))
+        })
+        .unwrap();
+    Json(rows.flatten().collect())
+}
+
+#[derive(Deserialize)]
+pub struct UpdateAck {
+    pub id: i64,
+    pub status: String,
+    #[serde(default)]
+    pub result: String,
+}
+
+pub async fn update_ack(
+    AxState(state): AxState<State>,
+    Path(device_id): Path<String>,
+    Json(req): Json<UpdateAck>,
+) -> StatusCode {
+    let conn = state.lock().await;
+    let _ = conn.execute(
+        "UPDATE update_requests SET status=?3, processed_at=?4, result=?5 WHERE id=?1 AND device_id=?2",
+        rusqlite::params![req.id, device_id, req.status, Utc::now().to_rfc3339(), req.result],
+    );
+    StatusCode::OK
+}
+
 pub async fn restore_progress_latest(AxState(state): AxState<State>) -> Json<Value> {
     let conn = state.lock().await;
     let v: Option<Value> = conn.query_row(

@@ -112,6 +112,19 @@ async fn main() -> Result<()> {
             get(dashboard::cloud_roms_page).post(dashboard::cloud_download_form),
         )
         .route(
+            "/api/v1/devices/:id/update-request",
+            post(routes::update_request),
+        )
+        .route(
+            "/api/v1/devices/:id/update-pending",
+            get(routes::update_pending),
+        )
+        .route("/api/v1/devices/:id/update-ack", post(routes::update_ack))
+        .route(
+            "/dashboard/device/:id/update",
+            post(dashboard::update_request_form),
+        )
+        .route(
             "/dashboard/device/:id/delete-rom",
             post(dashboard::delete_rom_form),
         )

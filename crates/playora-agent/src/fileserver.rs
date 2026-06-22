@@ -36,21 +36,37 @@ const ALLOWED_ROOTS: &[&str] = &[
 ];
 
 #[derive(Clone)]
-struct AppState {}
+struct AppState {
+    pin: String,
+}
 
 pub fn cmd_serve(bind: &str) -> Result<()> {
+    use rand::Rng as _;
+    let pin: String = {
+        let mut rng = rand::thread_rng();
+        (0..6).map(|_| rng.gen_range(0..10).to_string()).collect()
+    };
+    println!();
+    println!("\x1b[1;35m╔══════════════════════════════════════════════════════╗\x1b[0m");
+    println!("\x1b[1;35m║\x1b[0m  \x1b[1;37mFile Browser PIN: \x1b[1;33m{pin}\x1b[1;37m                              \x1b[1;35m║\x1b[0m");
+    println!("\x1b[1;35m║\x1b[0m  \x1b[2mEnter this on http://<device-ip>:7878 to unlock\x1b[0m  \x1b[1;35m║\x1b[0m");
+    println!("\x1b[1;35m╚══════════════════════════════════════════════════════╝\x1b[0m");
+    println!();
+
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
-        let state = Arc::new(AppState {});
+        let state = Arc::new(AppState { pin });
         let cors = tower_http::cors::CorsLayer::permissive();
         let app = Router::new()
             .route("/", get(index_page))
+            .route("/login", get(login_page).post(login_submit))
             .route("/api/list", get(list_dir))
             .route("/api/download", get(download_file))
             .route("/api/upload", post(upload_file))
             .route("/api/mkdir", post(mkdir))
             .route("/api/delete", post(delete_path))
-            // Increase body limit to 50 GiB so we can upload big archives.
+            .route("/api/move", post(move_path))
+            .route("/api/restart-es", post(restart_es))
             .layer(axum::extract::DefaultBodyLimit::max(
                 50 * 1024 * 1024 * 1024,
             ))
@@ -62,6 +78,88 @@ pub fn cmd_serve(bind: &str) -> Result<()> {
         axum::serve(listener, app).await?;
         Ok::<_, anyhow::Error>(())
     })
+}
+
+fn check_pin(headers: &HeaderMap, state: &AppState) -> Result<(), StatusCode> {
+    let cookie = headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    for kv in cookie.split(';') {
+        let kv = kv.trim();
+        if let Some(v) = kv.strip_prefix("playora_pin=") {
+            if v == state.pin {
+                return Ok(());
+            }
+        }
+    }
+    Err(StatusCode::UNAUTHORIZED)
+}
+
+async fn login_page() -> Html<&'static str> {
+    Html(LOGIN_HTML)
+}
+
+#[derive(Deserialize)]
+struct LoginForm {
+    pin: String,
+}
+
+async fn login_submit(
+    State(state): State<Arc<AppState>>,
+    axum::Form(form): axum::Form<LoginForm>,
+) -> Response {
+    if form.pin.trim() == state.pin {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&format!(
+                "playora_pin={}; Path=/; Max-Age=86400; SameSite=Lax",
+                state.pin
+            ))
+            .unwrap(),
+        );
+        headers.insert(header::LOCATION, HeaderValue::from_static("/"));
+        (StatusCode::SEE_OTHER, headers, "").into_response()
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            Html("<p>Wrong PIN — <a href=\"/login\">try again</a>.</p>"),
+        )
+            .into_response()
+    }
+}
+
+async fn restart_es(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<StatusCode, StatusCode> {
+    check_pin(&headers, &state)?;
+    let _ = std::process::Command::new("sudo")
+        .args(["systemctl", "restart", "emulationstation"])
+        .status();
+    Ok(StatusCode::OK)
+}
+
+#[derive(Deserialize)]
+struct MoveForm {
+    from: String,
+    to: String,
+}
+
+async fn move_path(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(form): Json<MoveForm>,
+) -> Result<StatusCode, StatusCode> {
+    check_pin(&headers, &state)?;
+    let from = safe(&form.from)?;
+    let to = safe(&form.to)?;
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::rename(&from, &to).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::OK)
 }
 
 #[derive(Deserialize)]
@@ -83,7 +181,12 @@ fn safe(path: &str) -> Result<PathBuf, StatusCode> {
     Ok(resolved)
 }
 
-async fn list_dir(Query(q): Query<PathQuery>) -> Result<Json<serde_json::Value>, StatusCode> {
+async fn list_dir(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<PathQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_pin(&headers, &state)?;
     let p = safe(&q.path)?;
     if !p.is_dir() {
         return Err(StatusCode::NOT_FOUND);
@@ -122,9 +225,11 @@ async fn list_dir(Query(q): Query<PathQuery>) -> Result<Json<serde_json::Value>,
 }
 
 async fn download_file(
+    State(state): State<Arc<AppState>>,
     Query(q): Query<PathQuery>,
     req: Request<Body>,
 ) -> Result<Response, StatusCode> {
+    check_pin(req.headers(), &state)?;
     let p = safe(&q.path)?;
     if !p.is_file() {
         return Err(StatusCode::NOT_FOUND);
@@ -198,9 +303,12 @@ fn parse_range(h: &str, total: u64) -> Option<(u64, u64)> {
 }
 
 async fn upload_file(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(q): Query<PathQuery>,
     mut multi: Multipart,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    check_pin(&headers, &state)?;
     let dir = safe(&q.path)?;
     std::fs::create_dir_all(&dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut written = Vec::new();
@@ -246,13 +354,23 @@ async fn upload_file(
     Ok(Json(json!({"uploaded": written})))
 }
 
-async fn mkdir(Query(q): Query<PathQuery>) -> Result<StatusCode, StatusCode> {
+async fn mkdir(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<PathQuery>,
+) -> Result<StatusCode, StatusCode> {
+    check_pin(&headers, &state)?;
     let p = safe(&q.path)?;
     std::fs::create_dir_all(&p).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::CREATED)
 }
 
-async fn delete_path(Query(q): Query<PathQuery>) -> Result<StatusCode, StatusCode> {
+async fn delete_path(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<PathQuery>,
+) -> Result<StatusCode, StatusCode> {
+    check_pin(&headers, &state)?;
     let p = safe(&q.path)?;
     if !p.exists() {
         return Ok(StatusCode::NO_CONTENT);
@@ -265,9 +383,38 @@ async fn delete_path(Query(q): Query<PathQuery>) -> Result<StatusCode, StatusCod
     Ok(StatusCode::OK)
 }
 
-async fn index_page() -> Html<&'static str> {
-    Html(INDEX_HTML)
+async fn index_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    if check_pin(&headers, &state).is_err() {
+        let mut h = HeaderMap::new();
+        h.insert(header::LOCATION, HeaderValue::from_static("/login"));
+        return (StatusCode::SEE_OTHER, h, "").into_response();
+    }
+    Html(INDEX_HTML).into_response()
 }
+
+const LOGIN_HTML: &str = r##"<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Playora · Unlock</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:#0a0a0d;color:#e6e6ea;margin:0;height:100vh;display:flex;align-items:center;justify-content:center}
+form{background:#101015;border:1px solid #1f1f26;border-radius:10px;padding:32px;text-align:center;min-width:300px}
+h1{font-size:18px;margin:0 0 6px 0}
+p{color:#777;font-size:13px;margin:0 0 18px 0}
+input{width:100%;background:#0a0a0a;color:#fff;border:1px solid #2a2a35;border-radius:8px;padding:14px;font-size:20px;text-align:center;letter-spacing:6px;font-family:'JetBrains Mono',monospace}
+button{margin-top:14px;width:100%;background:#1a3d5c;color:#7c9eff;border:1px solid #2a5078;border-radius:8px;padding:12px;font-size:14px;cursor:pointer}
+button:hover{background:#234e75}
+.hint{color:#444;font-size:11px;margin-top:14px}
+</style></head>
+<body>
+<form method="post" action="/login">
+  <h1>Playora File Browser</h1>
+  <p>Enter the 6-digit PIN shown on the R36S screen.</p>
+  <input name="pin" autofocus inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456">
+  <button type="submit">Unlock</button>
+  <div class="hint">PIN refreshes every time you re-run Playora File Browser.</div>
+</form>
+</body></html>
+"##;
 
 const INDEX_HTML: &str = r##"<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -310,6 +457,7 @@ tbody tr:hover td{background:#13131a}
   <button onclick="load('/userdata')">/userdata</button>
   <button onclick="up()">Up</button>
   <button onclick="newdir()">+ Folder</button>
+  <button onclick="restartES()" style="background:#3a0a0a;color:#ff7676;border-color:#4a1414">Restart EmulationStation</button>
 </div>
 <div class="crumbs" id="crumbs"></div>
 <table>
@@ -325,6 +473,8 @@ function fmtTime(t){if(!t)return '';return new Date(t*1000).toLocaleString();}
 function up(){const p=document.getElementById('path').value;const parts=p.split('/').filter(Boolean);if(parts.length<=1){load('/');return;}parts.pop();load('/'+parts.join('/'));}
 function newdir(){const cur=document.getElementById('path').value;const n=prompt('Folder name?');if(!n)return;fetch('/api/mkdir?path='+encodeURIComponent(cur+'/'+n),{method:'POST'}).then(()=>load(cur));}
 function delPath(p){if(!confirm('Delete '+p+'?'))return;fetch('/api/delete?path='+encodeURIComponent(p),{method:'POST'}).then(()=>load(document.getElementById('path').value));}
+function renamePath(p){const n=prompt('Rename to (full path)?',p);if(!n||n===p)return;fetch('/api/move',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from:p,to:n})}).then(()=>load(document.getElementById('path').value));}
+function restartES(){if(!confirm('Restart EmulationStation?'))return;fetch('/api/restart-es',{method:'POST'}).then(r=>{if(r.ok)alert('ES restart requested');else alert('failed — must run sudo from device')});}
 function load(p){
   document.getElementById('path').value=p;
   document.getElementById('crumbs').innerHTML=p.split('/').filter(Boolean).reduce((acc,part,i,a)=>{const sub='/'+a.slice(0,i+1).join('/');return acc+' / <a href="#" onclick="load(\''+sub+'\');return false">'+part+'</a>';},'/');
@@ -333,7 +483,8 @@ function load(p){
     (d.entries||[]).forEach(e=>{
       const tr=document.createElement('tr');
       const name=e.is_dir?'<a class="dir" href="#" onclick="load(\''+e.path+'\');return false">📁 '+e.name+'</a>':'<span class="file">📄 '+e.name+'</span>';
-      const act=e.is_dir?'<button class="del" onclick="delPath(\''+e.path+'\')">Delete</button>':'<a href="/api/download?path='+encodeURIComponent(e.path)+'"><button>Download</button></a> <button class="del" onclick="delPath(\''+e.path+'\')">Delete</button>';
+      const rn='<button onclick="renamePath(\''+e.path+'\')">Rename</button>';
+      const act=e.is_dir?rn+' <button class="del" onclick="delPath(\''+e.path+'\')">Delete</button>':'<a href="/api/download?path='+encodeURIComponent(e.path)+'"><button>Download</button></a> '+rn+' <button class="del" onclick="delPath(\''+e.path+'\')">Delete</button>';
       tr.innerHTML='<td>'+name+'</td><td class="size">'+fmtSize(e.size)+'</td><td class="mtime">'+fmtTime(e.modified)+'</td><td class="act">'+act+'</td>';
       tb.appendChild(tr);
     });

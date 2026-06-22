@@ -1588,6 +1588,7 @@ dependencies = [
  "libc",
  "playora-common",
  "qrcode",
+ "rand 0.8.6",
  "ratatui",
  "reqwest",
  "rusqlite",

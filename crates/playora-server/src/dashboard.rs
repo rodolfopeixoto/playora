@@ -149,6 +149,18 @@ pub async fn cloud_download_form(
     Redirect::to(&format!("/dashboard/cloud-roms/{device_id}?queued=1"))
 }
 
+pub async fn update_request_form(
+    AxState(state): AxState<State>,
+    AxPath(device_id): AxPath<String>,
+) -> Redirect {
+    let conn = state.lock().await;
+    let _ = conn.execute(
+        "INSERT INTO update_requests(device_id, status, requested_at) VALUES (?1, 'pending', ?2)",
+        rusqlite::params![device_id, chrono::Utc::now().to_rfc3339()],
+    );
+    Redirect::to(&format!("/dashboard/device/{device_id}?update=queued"))
+}
+
 pub async fn cloud_roms_page(
     AxState(state): AxState<State>,
     AxPath(device_id): AxPath<String>,
@@ -308,6 +320,8 @@ footer{color:#444;font-size:11px;margin-top:48px;padding-top:16px;border-top:1px
 .bar>div{height:100%;background:linear-gradient(90deg,#7c4dff,#42a5f5)}
 button.del{background:#3a0a0a;color:#ff7676;border:1px solid #4a1414;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:11px}
 button.del:hover{background:#4a1010;color:#fff}
+button.upd{background:#0f2818;color:#5fbf76;border:1px solid #1f3d28;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px}
+button.upd:hover{background:#1a3a25}
 "#;
 
 fn header(active: &str) -> String {
@@ -1019,12 +1033,12 @@ pub async fn device_page(
 
     let fs_block = match last_ip.as_deref().filter(|s| !s.is_empty()) {
         Some(ip) => format!(
-            r#"<p class="sub">Last LAN IP: <code>{ip}</code> · <a href="http://{ip}:7878/" target="_blank" class="open-fs">Open File Browser →</a> · <a href="/dashboard/cloud-roms/{did}">Cloud ROMs →</a> <span class="muted">(file browser needs <code>Ports → Playora File Browser</code> first)</span></p>"#,
+            r#"<p class="sub">Last LAN IP: <code>{ip}</code> · <a href="http://{ip}:7878/" target="_blank" class="open-fs">Open File Browser →</a> · <a href="/dashboard/cloud-roms/{did}">Cloud ROMs →</a> · <form method="post" action="/dashboard/device/{did}/update" style="display:inline" onsubmit="return confirm('Queue agent self-update?')"><button class="upd" type="submit">Update Agent</button></form></p>"#,
             did = esc(&id)
         ),
         None => format!(
-            "<p class=\"sub muted\">No LAN IP recorded yet. <a href=\"/dashboard/cloud-roms/{}\">Cloud ROMs →</a></p>",
-            esc(&id)
+            "<p class=\"sub muted\">No LAN IP recorded yet. <a href=\"/dashboard/cloud-roms/{did}\">Cloud ROMs →</a> · <form method=\"post\" action=\"/dashboard/device/{did}/update\" style=\"display:inline\"><button class=\"upd\" type=\"submit\">Update Agent</button></form></p>",
+            did = esc(&id)
         ),
     };
 
