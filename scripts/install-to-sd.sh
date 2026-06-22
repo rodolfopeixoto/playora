@@ -44,16 +44,13 @@ if [ -f "$RCLONE_CACHE" ]; then
     echo "[install] rclone -> $PLAYORA_DIR/bin/rclone"
 fi
 
-# Dual-mode port runner. Two modes:
-#   tty: claim /dev/tty1, run command in foreground with colored output the
-#        user can read on the R36S screen. ES is paused while a Port script
-#        runs, so taking tty1 is safe. We restart ES on exit.
-#   bg:  detached background (the legacy pattern) — fire-and-forget.
+# Single-mode foreground port runner — matches the PortMaster / ThemeMaster
+# convention. Runs synchronously on /dev/tty1 so ES always sees a normal
+# child-script lifecycle, then restarts ES on exit. Never tries to detach.
+#
+# Args: NAME CMD [TIMEOUT_SECONDS]
 cat > "$PLAYORA_DIR/port-runner.sh" <<'RUNNER'
 #!/bin/sh
-# Args: MODE NAME CMD [TIMEOUT_SECONDS]
-#   MODE = tty | bg
-MODE="$1"; shift
 NAME="$1"; shift
 CMD="$1"; shift
 TIMEOUT="${1:-30}"
@@ -63,35 +60,17 @@ LOG="/roms/.playora/logs/${SAFE}_$(date +%Y%m%d_%H%M%S).log"
 mkdir -p /roms/.playora/logs
 AGENT="/roms/.playora/playora-agent --config /roms/.playora/agent.toml"
 ESUDO="sudo"
-[ "$EUID" = "0" ] && ESUDO=""
+[ "$(id -u)" = "0" ] && ESUDO=""
 
-if [ "$MODE" = "tty" ]; then
-    # Claim the framebuffer console.
-    export TERM=linux
-    $ESUDO chmod 666 /dev/tty1 /dev/uinput 2>/dev/null || true
-    printf '\033c' > /dev/tty1
-    exec </dev/tty1 >/dev/tty1 2>&1
-else
-    # Detach completely so ES keeps tty1 clean.
-    exec </dev/null >>"$LOG" 2>&1
-fi
+# PortMaster pattern: take /dev/tty1, clear, run on it.
+export TERM=linux
+$ESUDO chmod 666 /dev/tty1 /dev/uinput 2>/dev/null || true
+printf '\033c' > /dev/tty1
+exec </dev/tty1 >/dev/tty1 2>&1
 
 log() {
-    if [ "$MODE" = "tty" ]; then
-        printf '\033[2m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"
-        echo "[$(date +%H:%M:%S)] $*" >> "$LOG"
-    else
-        echo "[$(date +%H:%M:%S)] $*"
-    fi
-}
-
-# Restart EmulationStation at the end so the framebuffer is clean.
-restart_es() {
-    if [ "$MODE" = "tty" ]; then
-        $ESUDO systemctl restart emulationstation 2>/dev/null \
-            || $ESUDO systemctl restart emustation 2>/dev/null \
-            || true
-    fi
+    printf '\033[2m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"
+    echo "[$(date +%H:%M:%S)] $*" >> "$LOG"
 }
 
 END_RC=1
@@ -100,24 +79,21 @@ trap '
     log "exit $RC"
     $AGENT activity-end "$NAME" "$RC" --log "$LOG" >/dev/null 2>&1 || true
     $AGENT sync >/dev/null 2>&1 || true
-    restart_es
+    clear > /dev/tty1
+    $ESUDO systemctl restart emulationstation 2>/dev/null \
+        || $ESUDO systemctl restart emustation 2>/dev/null \
+        || true
 ' EXIT INT TERM
 
-if [ "$MODE" = "tty" ]; then
-    printf '\033[1;35m╔══════════════════════════════════════════════════════╗\n'
-    printf '║  \033[1;37mPLAYORA · %-43s\033[1;35m║\n' "$NAME"
-    printf '╚══════════════════════════════════════════════════════╝\033[0m\n\n'
-fi
+printf '\033[1;35m╔══════════════════════════════════════════════════════╗\n'
+printf '║  \033[1;37mPLAYORA · %-43s\033[1;35m║\n' "$NAME"
+printf '╚══════════════════════════════════════════════════════╝\033[0m\n\n'
 
-log "starting at $(date)"
 log "command: $CMD"
 log "timeout: ${TIMEOUT}s"
-log "log: $LOG"
 
 $AGENT activity-begin "$NAME" >/dev/null 2>&1 || true
-log "> sent start event"
 
-log "> running '$CMD' (max ${TIMEOUT}s)..."
 NICE="nice -n 15"
 if command -v ionice >/dev/null 2>&1; then
     IONICE="ionice -c 3"
@@ -137,12 +113,8 @@ if [ "$END_RC" = "0" ]; then
 else
     printf '\n\033[1;31m  ✗ FAIL  \033[0m exit %s\n' "$END_RC"
 fi
-log "> syncing to dashboard..."
-
-if [ "$MODE" = "tty" ]; then
-    printf '\n\033[2m  Returning to EmulationStation in 5s...\033[0m\n'
-    sleep 5
-fi
+printf '\n\033[2m  Returning to EmulationStation in 5s...\033[0m\n'
+sleep 5
 exit $END_RC
 RUNNER
 chmod 0755 "$PLAYORA_DIR/port-runner.sh"
@@ -174,33 +146,19 @@ write_splash() {
         "$out" 2>/dev/null && echo "[install] splash: $(basename "$out")"
 }
 
-# Generator: per-port wrapper. mode=tty means the script claims /dev/tty1
-# and shows colored output to the user; mode=bg detaches silently.
+# Generator: every Playora port is a single foreground exec into port-runner.
+# Matches PortMaster/ThemeMaster convention so ES never has to redraw a
+# half-detached child.
 write_port() {
     name="$1"; cmd="$2"; timeout_s="${3:-30}"; mode="${4:-tty}"
+    _=$mode
     file="$PORTS_DIR/Playora ${name}.sh"
-    if [ "$mode" = "tty" ]; then
-        # Foreground: port-runner takes the tty + restarts ES on exit.
-        cat > "$file" <<EOF
+    cat > "$file" <<EOF
 #!/bin/sh
-exec /roms/.playora/port-runner.sh tty "${name}" "${cmd}" "${timeout_s}"
+exec /roms/.playora/port-runner.sh "${name}" "${cmd}" "${timeout_s}"
 EOF
-    else
-        # Background: fire-and-forget so ES returns immediately.
-        cat > "$file" <<EOF
-#!/bin/sh
-SETSID=\$(command -v setsid 2>/dev/null)
-if [ -n "\$SETSID" ]; then
-    \$SETSID nohup /roms/.playora/port-runner.sh bg "${name}" "${cmd}" "${timeout_s}" </dev/null >/dev/null 2>&1 &
-else
-    nohup /roms/.playora/port-runner.sh bg "${name}" "${cmd}" "${timeout_s}" </dev/null >/dev/null 2>&1 &
-fi
-sleep 1
-exit 0
-EOF
-    fi
     chmod 0755 "$file"
-    echo "[install] wrote ${file} (mode=${mode})"
+    echo "[install] wrote ${file}"
     write_splash "${name}" "${cmd}" "${timeout_s}"
 }
 
@@ -449,19 +407,22 @@ XML
 
 write_gamelist "$PORTS_DIR"
 
-# Mark Counter-Strike (PortMaster entry) hidden in the existing legacy
-# /roms/ports/gamelist.xml so ES doesn't list it in the same view as Playora.
-# Only edits if the entry is present.
-LEGACY_GL="$PORTS_DIR/gamelist.xml.legacy"
-if [ -f "$PORTS_DIR/gamelist.xml.bak" ]; then
-    LEGACY_GL="$PORTS_DIR/gamelist.xml.bak"
-fi
-# Some firmwares write a parallel gamelist for ES. Our write_gamelist
-# wrote a fresh one above; persist a sidecar hiding Counter-Strike.sh
-# so future re-merges keep it hidden.
-cat > "$PORTS_DIR/.playora-hidden" <<'EOF'
-Counter-Strike.sh
-EOF
+# PortMaster installs other .sh entries (Counter-Strike, etc) right in
+# /roms/ports/. write_gamelist marks them <hidden>true</hidden>, but some
+# ES builds also need .skyscraper-ignore or just bail on hidden entries.
+# Belt-and-suspenders: drop a .playora-hidden manifest + nudge ES to
+# re-read the gamelist on next boot via .gamelist-needs-refresh marker.
+{
+    for sh in "$PORTS_DIR"/*.sh; do
+        [ -f "$sh" ] || continue
+        base="$(basename "$sh")"
+        case "$base" in
+            Playora\ *) continue ;;
+            *) echo "$base" ;;
+        esac
+    done
+} > "$PORTS_DIR/.playora-hidden"
+touch "$PORTS_DIR/.gamelist-needs-refresh"
 
 # Clean up any leftover /roms/playora/ mirror + es_systems.cfg edits from v0.2.
 # Playora lives in /roms/ports/ like PortMaster / ThemeMaster.
