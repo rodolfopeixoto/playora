@@ -226,16 +226,8 @@ write_port "Update"          "self-update"                       180   tty
 cat > "$PORTS_DIR/Playora Autosync Enable.sh" <<'EOF'
 #!/bin/sh
 SETSID=$(command -v setsid 2>/dev/null)
-detach() {
-    if [ -n "$SETSID" ]; then
-        $SETSID nohup "$@" </dev/null >/dev/null 2>&1 &
-    else
-        nohup "$@" </dev/null >/dev/null 2>&1 &
-    fi
-}
-detach /roms/.playora/port-runner.sh "Autosync Enable" "noop" 60
-detach sh -c '
-    sleep 2
+[ -n "$SETSID" ] && PREFIX="$SETSID nohup" || PREFIX="nohup"
+$PREFIX sh -c '
     mkdir -p /roms/.playora/logs
     LOG="/roms/.playora/logs/autosync_enable_$(date +%Y%m%d_%H%M%S).log"
     {
@@ -262,7 +254,7 @@ UNIT
             echo "running as background process (no systemd)"
         fi
     } >> "$LOG" 2>&1
-'
+' </dev/null >/dev/null 2>&1 &
 sleep 1
 exit 0
 EOF
@@ -273,24 +265,17 @@ write_splash "Autosync Enable" "systemd enable + start" "60"
 cat > "$PORTS_DIR/Playora Autosync Disable.sh" <<'EOF'
 #!/bin/sh
 SETSID=$(command -v setsid 2>/dev/null)
-detach() {
-    if [ -n "$SETSID" ]; then
-        $SETSID nohup "$@" </dev/null >/dev/null 2>&1 &
-    else
-        nohup "$@" </dev/null >/dev/null 2>&1 &
-    fi
-}
-detach /roms/.playora/port-runner.sh "Autosync Disable" "noop" 60
-detach sh -c '
-    sleep 2
+[ -n "$SETSID" ] && PREFIX="$SETSID nohup" || PREFIX="nohup"
+$PREFIX sh -c '
     LOG="/roms/.playora/logs/autosync_disable_$(date +%Y%m%d_%H%M%S).log"
+    mkdir -p /roms/.playora/logs
     {
         echo "==== $(date) ===="
         sudo systemctl disable --now playora-agent.service 2>/dev/null || true
         pkill -f "playora-agent.*run" 2>/dev/null || true
         echo "service disabled"
     } >> "$LOG" 2>&1
-'
+' </dev/null >/dev/null 2>&1 &
 sleep 1
 exit 0
 EOF
