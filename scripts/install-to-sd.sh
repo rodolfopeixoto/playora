@@ -221,6 +221,8 @@ write_port "Cloud Restore"   "cloud restore"            1200  bg
 write_port "Cloud Status"    "cloud status"             10    tty
 write_port "Kodi Setup"      "kodi setup"               60    tty
 write_port "Update"          "self-update"              180   tty
+write_port "File Browser"    "serve"                    none  bg
+write_port "Install Main Menu" "install-main-menu"      30    tty
 
 # Autosync triple: Status / Enable / Disable
 write_port "Autosync Status" "status"                   10    tty
@@ -416,6 +418,8 @@ desc_for() {
         "Autosync Enable") echo "Install + start the autosync systemd service so events sync continuously.";;
         "Autosync Disable") echo "Stop + disable the autosync service.";;
         "Recover") echo "Emergency: kill agent processes, clear locks, restart EmulationStation.";;
+        "File Browser") echo "Start the on-device file server on :7878. Open the link on the dashboard Device page to browse /roms, upload (ZIPs auto-extract), download.";;
+        "Install Main Menu") echo "Register the Playora tile in the EmulationStation Main Menu (edits es_systems.cfg with sudo, backs up first).";;
         *) echo "Playora command: $1.";;
     esac
 }

@@ -138,11 +138,14 @@ pub fn cmd_run(cfg: AgentConfig) -> Result<()> {
         println!("scheduled: extract ROMs daily at {h:02}:00 UTC");
     }
     let mut sched = Scheduler::default();
+    let mut sessions = crate::sessions::SessionTracker::default();
     loop {
         let _ = cmd_heartbeat(cfg.clone());
         if let Err(e) = cmd_sync_once(cfg.clone()) {
             tracing::warn!("sync: {e}");
         }
+        // Game-session detection (RetroArch process poll).
+        sessions.tick(&cfg);
         // Pull dashboard delete queue + apply.
         let _ = crate::cleanup::cmd_cleanup(cfg.clone(), true);
         // Scheduled jobs.

@@ -113,6 +113,10 @@ async fn main() -> Result<()> {
 
     tracing::info!("listening on http://{}", args.bind);
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

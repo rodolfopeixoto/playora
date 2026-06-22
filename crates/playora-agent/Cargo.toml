@@ -37,6 +37,10 @@ self_update.workspace = true
 zip.workspace = true
 qrcode = "0.14"
 libc = "0.2"
+axum = { version = "0.7", features = ["json", "macros", "multipart"] }
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["io"] }
+tower-http = { workspace = true, features = ["fs", "cors"] }
 
 [dev-dependencies]
 tempfile = "3"

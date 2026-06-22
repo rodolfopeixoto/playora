@@ -11,10 +11,12 @@ mod db;
 mod download;
 mod extract;
 mod features;
+mod fileserver;
 mod hw;
 mod kodi;
 mod launcher;
 mod lockfile;
+mod mainmenu;
 mod myrient;
 mod portmaster;
 mod resources;
@@ -22,6 +24,7 @@ mod restore;
 mod saves;
 mod scanner;
 mod selfupdate;
+mod sessions;
 mod showlog;
 mod sync;
 mod tests;
@@ -197,6 +200,13 @@ enum Cmd {
     /// Cloud (Google Drive via rclone): setup OAuth, backup, restore
     #[command(subcommand)]
     Cloud(CloudCmd),
+    /// Install the Playora tile in EmulationStation Main Menu (edits es_systems.cfg)
+    InstallMainMenu,
+    /// Run the local file-browser HTTP server (used by Playora File Browser port)
+    Serve {
+        #[arg(long, default_value = "0.0.0.0:7878")]
+        bind: String,
+    },
     /// Process /roms/.playora/delete_queue.txt and (optionally) server delete-requests
     Cleanup {
         /// Also pull pending deletions from the dashboard server.
@@ -624,6 +634,8 @@ fn main() -> Result<()> {
             let cfg = load_cfg(cli.config.as_deref())?;
             cleanup::cmd_cleanup(cfg, from_server)
         }
+        Cmd::InstallMainMenu => mainmenu::cmd_install_main_menu(),
+        Cmd::Serve { bind } => fileserver::cmd_serve(&bind),
     }
 }
 

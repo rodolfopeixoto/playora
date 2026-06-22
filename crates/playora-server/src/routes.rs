@@ -1,6 +1,6 @@
 use crate::State;
 use axum::{
-    extract::{Path, Query, State as AxState},
+    extract::{ConnectInfo, Path, Query, State as AxState},
     http::StatusCode,
     Json,
 };
@@ -8,6 +8,7 @@ use chrono::Utc;
 use playora_common::*;
 use serde::Deserialize;
 use serde_json::Value;
+use std::net::SocketAddr;
 
 pub async fn health() -> &'static str {
     "ok"
@@ -112,16 +113,20 @@ pub async fn resource_sample(
 
 pub async fn events_batch(
     AxState(state): AxState<State>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(batch): Json<SyncBatch>,
 ) -> Json<SyncAck> {
     let conn = state.lock().await;
-    // Auto-register device on first sight
     let now = Utc::now().to_rfc3339();
+    let client_ip = addr.ip().to_string();
     let _ = conn.execute(
-        "INSERT INTO devices(device_id, device_name, device_profile, os_family, agent_version, created_at, last_seen_at)
-         VALUES (?1, 'R36S', 'r36s-darkosre-clone', 'darkosre-r36', ?2, ?3, ?3)
-         ON CONFLICT(device_id) DO UPDATE SET last_seen_at=excluded.last_seen_at, agent_version=excluded.agent_version",
-        rusqlite::params![batch.device_id.0, batch.agent_version, now],
+        "INSERT INTO devices(device_id, device_name, device_profile, os_family, agent_version, last_ip, created_at, last_seen_at)
+         VALUES (?1, 'R36S', 'r36s-darkosre-clone', 'darkosre-r36', ?2, ?3, ?4, ?4)
+         ON CONFLICT(device_id) DO UPDATE SET
+            last_seen_at=excluded.last_seen_at,
+            agent_version=excluded.agent_version,
+            last_ip=excluded.last_ip",
+        rusqlite::params![batch.device_id.0, batch.agent_version, client_ip, now],
     );
     let mut accepted = vec![];
     let mut duplicates = vec![];

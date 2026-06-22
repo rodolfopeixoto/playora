@@ -609,6 +609,14 @@ pub async fn device_page(
         "SELECT device_id, COALESCE(device_name,''), COALESCE(device_profile,''), COALESCE(os_family,''), COALESCE(last_seen_at,'') FROM devices WHERE device_id=?1",
         [id.clone()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     ).ok();
+    let last_ip: Option<String> = conn
+        .query_row(
+            "SELECT last_ip FROM devices WHERE device_id=?1",
+            [id.clone()],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten();
     let total_play: i64 = conn
         .query_row(
             "SELECT COALESCE(SUM(duration_seconds),0) FROM game_sessions WHERE device_id=?1",
@@ -880,6 +888,13 @@ pub async fn device_page(
         )
         .unwrap_or(0);
 
+    let fs_block = match last_ip.as_deref().filter(|s| !s.is_empty()) {
+        Some(ip) => format!(
+            r#"<p class="sub">Last LAN IP: <code>{ip}</code> · <a href="http://{ip}:7878/" target="_blank" class="open-fs">Open File Browser →</a> <span class="muted">(start it on device with <code>Ports → Playora File Browser</code>)</span></p>"#
+        ),
+        None => "<p class=\"sub muted\">No LAN IP recorded yet — heartbeat once for the file browser link to appear.</p>".to_string(),
+    };
+
     let title = match dev.as_ref() {
         Some((_, name, profile, os, seen)) => format!(
             "<h1>{}</h1><p class=\"sub\"><span class=\"pill\">{}</span> · {} · last seen <code>{}</code></p><p><code>{}</code></p>",
@@ -898,6 +913,7 @@ pub async fn device_page(
 <body><div class="wrap">
 {hdr}
 {title}
+{fs_block}
 <div class="grid">
     <div class="card"><div class="l">Sessions</div><div class="v">{sess_count}</div></div>
     <div class="card"><div class="l">Total playtime</div><div class="v">{play}</div></div>
