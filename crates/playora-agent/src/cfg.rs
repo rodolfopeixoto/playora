@@ -52,8 +52,51 @@ pub fn load(explicit: Option<&str>) -> Result<AgentConfig> {
     }
     let _ = ACTIVE_CFG_PATH.set(path.clone());
     let txt = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let cfg: AgentConfig = toml::from_str(&txt)?;
+    let mut cfg: AgentConfig = toml::from_str(&txt)?;
+    cfg.server_url = resolve_server_url(&cfg.server_url);
     Ok(cfg)
+}
+
+/// Resolve "auto", empty, or missing config to a real URL via:
+///   1. PLAYORA_SERVER_URL env override
+///   2. mDNS lookup of `_playora._tcp.local.` (2s window)
+///   3. Whatever was in agent.toml
+pub fn resolve_server_url(from_cfg: &str) -> String {
+    if let Ok(env) = std::env::var("PLAYORA_SERVER_URL") {
+        if !env.trim().is_empty() {
+            return env;
+        }
+    }
+    let needs_discovery = from_cfg.is_empty()
+        || from_cfg.eq_ignore_ascii_case("auto")
+        || from_cfg.eq_ignore_ascii_case("mdns");
+    if needs_discovery {
+        if let Some(url) = mdns_lookup() {
+            return url;
+        }
+    }
+    from_cfg.to_string()
+}
+
+fn mdns_lookup() -> Option<String> {
+    use mdns_sd::{ServiceDaemon, ServiceEvent};
+    let daemon = ServiceDaemon::new().ok()?;
+    let receiver = daemon.browse("_playora._tcp.local.").ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if let Ok(ev) = receiver.recv_timeout(remaining) {
+            if let ServiceEvent::ServiceResolved(info) = ev {
+                let port = info.get_port();
+                if let Some(ip) = info.get_addresses().iter().next() {
+                    let _ = daemon.shutdown();
+                    return Some(format!("http://{ip}:{port}"));
+                }
+            }
+        }
+    }
+    let _ = daemon.shutdown();
+    None
 }
 
 pub fn cmd_init(

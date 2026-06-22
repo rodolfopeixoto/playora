@@ -26,6 +26,38 @@ struct Args {
 
 pub type State = Arc<Mutex<rusqlite::Connection>>;
 
+fn register_mdns(port: u16) -> anyhow::Result<mdns_sd::ServiceDaemon> {
+    use mdns_sd::{ServiceDaemon, ServiceInfo};
+    let daemon = ServiceDaemon::new()?;
+    let hostname = format!(
+        "{}.local.",
+        std::env::var("HOSTNAME")
+            .unwrap_or_else(|_| "playora-server".into())
+            .replace('.', "-")
+    );
+    let ips: Vec<std::net::IpAddr> = if_addrs::get_if_addrs()
+        .map(|ifs| {
+            ifs.into_iter()
+                .filter(|i| !i.is_loopback())
+                .map(|i| i.ip())
+                .collect()
+        })
+        .unwrap_or_default();
+    let ip_strs: Vec<String> = ips.iter().map(|i| i.to_string()).collect();
+    let ip_refs: Vec<&str> = ip_strs.iter().map(|s| s.as_str()).collect();
+    let info = ServiceInfo::new(
+        "_playora._tcp.local.",
+        "playora-server",
+        &hostname,
+        &ip_refs[..],
+        port,
+        &[("version", env!("CARGO_PKG_VERSION"))][..],
+    )?;
+    daemon.register(info)?;
+    tracing::info!("mDNS registered _playora._tcp.local. on port {port}");
+    Ok(daemon)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -37,6 +69,16 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let conn = db::open(&args.db)?;
     let state: State = Arc::new(Mutex::new(conn));
+
+    // Register over mDNS so agents on the LAN can discover us without
+    // hard-coding the IP. Holds the daemon alive for the process lifetime.
+    let _mdns = match register_mdns(args.bind.port()) {
+        Ok(d) => Some(d),
+        Err(e) => {
+            tracing::warn!("mDNS register failed: {e} — agents will need PLAYORA_SERVER_URL");
+            None
+        }
+    };
 
     let app = Router::new()
         .route("/health", get(routes::health))

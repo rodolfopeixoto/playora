@@ -1031,13 +1031,32 @@ pub async fn device_page(
         )
         .unwrap_or(0);
 
+    // Heartbeat recency drives the "Auto-running" badge.
+    let recent_heartbeat: Option<String> = conn
+        .query_row(
+            "SELECT received_at FROM heartbeats WHERE device_id=?1 ORDER BY id DESC LIMIT 1",
+            [id.clone()],
+            |r| r.get(0),
+        )
+        .ok();
+    let auto_running = recent_heartbeat
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|t| (Utc::now() - t.with_timezone(&Utc)).num_seconds() < 120)
+        .unwrap_or(false);
+    let auto_badge = if auto_running {
+        "<span class=\"pill ok\" title=\"autosync is running on the device — file browser + game tracker live\">Auto-running</span>"
+    } else {
+        "<span class=\"pill warn\" title=\"last heartbeat is older than 2 min — run Ports → Playora Autosync Enable on the device\">Idle</span>"
+    };
+
     let fs_block = match last_ip.as_deref().filter(|s| !s.is_empty()) {
         Some(ip) => format!(
-            r#"<p class="sub">Last LAN IP: <code>{ip}</code> · <a href="http://{ip}:7878/" target="_blank" class="open-fs">Open File Browser →</a> · <a href="/dashboard/cloud-roms/{did}">Cloud ROMs →</a> · <form method="post" action="/dashboard/device/{did}/update" style="display:inline" onsubmit="return confirm('Queue agent self-update?')"><button class="upd" type="submit">Update Agent</button></form></p>"#,
+            r#"<p class="sub">Last LAN IP: <code>{ip}</code> {auto_badge} · <a href="http://{ip}:7878/" target="_blank" class="open-fs">Open File Browser →</a> · <a href="/dashboard/cloud-roms/{did}">Cloud ROMs →</a> · <form method="post" action="/dashboard/device/{did}/update" style="display:inline" onsubmit="return confirm('Queue agent self-update?')"><button class="upd" type="submit">Update Agent</button></form></p>"#,
             did = esc(&id)
         ),
         None => format!(
-            "<p class=\"sub muted\">No LAN IP recorded yet. <a href=\"/dashboard/cloud-roms/{did}\">Cloud ROMs →</a> · <form method=\"post\" action=\"/dashboard/device/{did}/update\" style=\"display:inline\"><button class=\"upd\" type=\"submit\">Update Agent</button></form></p>",
+            "<p class=\"sub muted\">No LAN IP recorded yet {auto_badge}. <a href=\"/dashboard/cloud-roms/{did}\">Cloud ROMs →</a> · <form method=\"post\" action=\"/dashboard/device/{did}/update\" style=\"display:inline\"><button class=\"upd\" type=\"submit\">Update Agent</button></form></p>",
             did = esc(&id)
         ),
     };

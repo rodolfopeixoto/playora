@@ -109,11 +109,15 @@ struct Detected {
     core: Option<String>,
 }
 
-/// Scan running emulator processes (retroarch, mupen64plus, ppsspp, mgba,
-/// drastic, dosbox, scummvm, …) and extract the loaded ROM from /proc.
+/// PID-agnostic: scan EVERY /proc/<pid>/cmdline for a ROM-like token.
+/// We don't care what binary is running — only what file it has open.
+/// This catches dArkOSRE launcher shells, standalone emulators, runcommand
+/// wrappers, etc.
 fn detect_running_rom() -> Option<Detected> {
-    // Read /proc directly — works on every Linux even without busybox pgrep -a.
     let procs = std::fs::read_dir("/proc").ok()?;
+    // Track the youngest match (most recent process) so a freshly-started
+    // emulator inside a wrapper wins over the wrapper script itself.
+    let mut best: Option<(u64, Detected)> = None;
     for entry in procs.flatten() {
         let pid = match entry.file_name().to_string_lossy().parse::<u32>() {
             Ok(p) => p,
@@ -126,66 +130,49 @@ fn detect_running_rom() -> Option<Detected> {
         if cmdline_raw.is_empty() {
             continue;
         }
-        // /proc/<pid>/cmdline is NUL-separated.
-        let argv: Vec<String> = cmdline_raw
+        let joined: String = cmdline_raw
             .split(|b| *b == 0)
             .filter(|s| !s.is_empty())
             .map(|s| String::from_utf8_lossy(s).into_owned())
-            .collect();
-        if argv.is_empty() {
+            .collect::<Vec<_>>()
+            .join(" ");
+        // Skip our own process so playora-agent doesn't self-detect.
+        if joined.contains("playora-agent") {
             continue;
         }
-        let exe = Path::new(&argv[0])
-            .file_name()
+        let Some(rom) = parse_rom_from_cmdline(&joined) else {
+            continue;
+        };
+        let start_time = read_start_time(pid).unwrap_or(0);
+        let system_folder = Path::new(&rom)
+            .parent()
+            .and_then(|p| p.file_name())
             .and_then(|s| s.to_str())
             .unwrap_or("")
-            .to_lowercase();
-        if !is_emulator(&exe) {
-            continue;
-        }
-        let joined = argv.join(" ");
-        if let Some(rom) = parse_rom_from_cmdline(&joined) {
-            let system_folder = Path::new(&rom)
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            return Some(Detected {
-                rom_path: rom,
-                system_folder,
-                core: parse_core_from_cmdline(&joined),
-            });
+            .to_string();
+        let detected = Detected {
+            rom_path: rom,
+            system_folder,
+            core: parse_core_from_cmdline(&joined),
+        };
+        match best.as_ref() {
+            Some((t, _)) if *t >= start_time => {}
+            _ => best = Some((start_time, detected)),
         }
     }
-    None
+    best.map(|(_, d)| d)
 }
 
-const EMU_NEEDLES: &[&str] = &[
-    "retroarch",
-    "mupen64plus",
-    "ppsspp",
-    "mgba",
-    "drastic",
-    "dosbox",
-    "scummvm",
-    "dolphin-emu",
-    "yuzu",
-    "citra",
-    "pcsx2",
-    "pcsx_rearmed",
-    "snes9x",
-    "fceux",
-    "vbam",
-    "gpsp",
-    "stella",
-    "duckstation",
-    "redream",
-    "flycast",
-];
-
-fn is_emulator(name: &str) -> bool {
-    EMU_NEEDLES.iter().any(|n| name.contains(n))
+/// /proc/<pid>/stat field 22 is starttime (jiffies since boot).
+fn read_start_time(pid: u32) -> Option<u64> {
+    let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // Skip past the (comm) which may contain spaces.
+    let close = s.rfind(')')?;
+    let rest = &s[close + 1..];
+    let parts: Vec<&str> = rest.split_whitespace().collect();
+    // After ')', the next field is state (index 0). starttime is field 22
+    // in the full layout, so index 22 - 3 = 19 here (we already skipped pid + comm).
+    parts.get(19)?.parse().ok()
 }
 
 const ROM_EXTS: &[&str] = &[
@@ -264,11 +251,13 @@ mod tests {
     }
 
     #[test]
-    fn emulator_name_match() {
-        assert!(is_emulator("retroarch"));
-        assert!(is_emulator("retroarch-aarch64"));
-        assert!(is_emulator("ppsspp-sdl"));
-        assert!(!is_emulator("bash"));
+    fn detects_wrapper_shell_cmdline() {
+        // dArkOSRE-style launcher shell wraps the real emulator.
+        let cmd = "bash /opt/system/Launchers/snes.sh /roms/snes/Castlevania.smc";
+        assert_eq!(
+            parse_rom_from_cmdline(cmd),
+            Some("/roms/snes/Castlevania.smc".into())
+        );
     }
 
     #[test]

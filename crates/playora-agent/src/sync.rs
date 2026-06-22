@@ -72,6 +72,10 @@ pub fn cmd_heartbeat(cfg: AgentConfig) -> Result<()> {
 }
 
 pub fn cmd_sync_once(cfg: AgentConfig) -> Result<()> {
+    if !online() {
+        println!("skip — offline");
+        return Ok(());
+    }
     let conn = crate::db::open(&crate::cfg::db_path())?;
     let events = crate::db::pending_events(&conn, cfg.max_batch_size)?;
     if events.is_empty() {
@@ -128,6 +132,13 @@ pub fn cmd_run(cfg: AgentConfig) -> Result<()> {
         "playora-agent run — heartbeat every {}s, sync every {}s",
         60, cfg.sync_interval_seconds
     );
+    // Always-on file browser so the dashboard's "Open File Browser" link
+    // works the moment the device boots. PIN protects writes.
+    std::thread::spawn(|| {
+        if let Err(e) = crate::fileserver::cmd_serve("0.0.0.0:7878") {
+            tracing::warn!("file browser exited: {e}");
+        }
+    });
     if let Some(h) = cfg.cloud_backup_daily_hour_utc {
         println!("scheduled: cloud backup daily at {h:02}:00 UTC");
     }
@@ -196,6 +207,9 @@ impl Scheduler {
 }
 
 fn poll_cloud_downloads(cfg: &AgentConfig) -> anyhow::Result<()> {
+    if !online() {
+        return Ok(());
+    }
     let url = format!(
         "{}/api/v1/devices/{}/cloud-download-pending",
         cfg.server_url.trim_end_matches('/'),
@@ -238,6 +252,9 @@ fn poll_cloud_downloads(cfg: &AgentConfig) -> anyhow::Result<()> {
 }
 
 fn poll_update_requests(cfg: &AgentConfig) -> anyhow::Result<()> {
+    if !online() {
+        return Ok(());
+    }
     let url = format!(
         "{}/api/v1/devices/{}/update-pending",
         cfg.server_url.trim_end_matches('/'),
@@ -325,4 +342,14 @@ fn free_disk_mb(paths: &[String]) -> u64 {
 fn wifi_connected() -> bool {
     let snap = crate::hw::snapshot();
     snap.net_ifs.iter().any(|n| n.is_wireless && n.up)
+}
+
+/// True if we have any non-loopback interface with an IPv4 address — i.e. the
+/// agent can plausibly reach the server. Used to skip network work on offline
+/// devices instead of looping retries that drain battery.
+pub fn online() -> bool {
+    let snap = crate::hw::snapshot();
+    snap.net_ifs
+        .iter()
+        .any(|n| n.up && n.ipv4.as_deref().map(|s| !s.is_empty()).unwrap_or(false))
 }

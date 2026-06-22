@@ -16,7 +16,6 @@ mod hw;
 mod kodi;
 mod launcher;
 mod lockfile;
-mod mainmenu;
 mod myrient;
 mod portmaster;
 mod resources;
@@ -200,8 +199,6 @@ enum Cmd {
     /// Cloud (Google Drive via rclone): setup OAuth, backup, restore
     #[command(subcommand)]
     Cloud(CloudCmd),
-    /// Install the Playora tile in EmulationStation Main Menu (edits es_systems.cfg)
-    InstallMainMenu,
     /// Run the local file-browser HTTP server (used by Playora File Browser port)
     Serve {
         #[arg(long, default_value = "0.0.0.0:7878")]
@@ -640,7 +637,6 @@ fn main() -> Result<()> {
             let cfg = load_cfg(cli.config.as_deref())?;
             cleanup::cmd_cleanup(cfg, from_server)
         }
-        Cmd::InstallMainMenu => mainmenu::cmd_install_main_menu(),
         Cmd::Serve { bind } => fileserver::cmd_serve(&bind),
     }
 }

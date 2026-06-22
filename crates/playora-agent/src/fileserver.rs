@@ -264,12 +264,31 @@ async fn download_file(
     let stream = tokio_util::io::ReaderStream::new(take);
     let body = Body::from_stream(stream);
 
+    // Inline-display images so the dashboard / browser shows thumbnails.
+    let lower = filename.to_lowercase();
+    let (disp, ctype) = if lower.ends_with(".png") {
+        ("inline", "image/png")
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        ("inline", "image/jpeg")
+    } else if lower.ends_with(".webp") {
+        ("inline", "image/webp")
+    } else if lower.ends_with(".gif") {
+        ("inline", "image/gif")
+    } else if lower.ends_with(".svg") {
+        ("inline", "image/svg+xml")
+    } else if lower.ends_with(".txt") || lower.ends_with(".log") || lower.ends_with(".md") {
+        ("inline", "text/plain; charset=utf-8")
+    } else {
+        ("attachment", "application/octet-stream")
+    };
+
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_DISPOSITION,
-        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+        HeaderValue::from_str(&format!("{disp}; filename=\"{filename}\""))
             .unwrap_or(HeaderValue::from_static("attachment")),
     );
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(ctype));
     headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     headers.insert(
         header::CONTENT_LENGTH,

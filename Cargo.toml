@@ -4,7 +4,7 @@ members = ["crates/playora-common", "crates/playora-agent", "crates/playora-serv
 
 [workspace.package]
 edition = "2021"
-version = "0.2.2"
+version = "0.3.0"
 authors = ["Rodolfo Peixoto <rodolfog.peixoto@gmail.com>"]
 license = "MIT"
 rust-version = "1.81"
@@ -34,6 +34,7 @@ ratatui = "0.29"
 bytesize = "1"
 scraper = "0.20"
 url = "2"
+mdns-sd = { version = "0.11", default-features = false }
 flate2 = "1"
 tar = "0.4"
 self_update = { version = "0.41", default-features = false, features = ["rustls"] }

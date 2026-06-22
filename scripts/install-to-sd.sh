@@ -207,27 +207,21 @@ EOF
 # name | command | timeout-seconds (or "none" for no timeout)
 # tty mode → user sees colored output on the R36S screen
 # bg  mode → fire-and-forget background job, dashboard tracks
-write_port "Quick Sync"      "quick-sync"               45    bg
-write_port "Doctor"          "doctor"                   30    tty
-write_port "Hardware"        "hardware snapshot --pretty --save" 30 tty
-write_port "Scan ROMs"       "scan"                     300   tty
-write_port "Extract ROMs"    "extract-roms"             600   tty
-write_port "Compress ROMs"   "compress-roms"            1800  tty
-write_port "Restore Backup"  "restore-tar"              none  tty
-write_port "Cleanup"         "cleanup"                  120   tty
-write_port "Cloud Setup"     "cloud setup"              600   tty
-write_port "Cloud Backup"    "cloud backup"             1200  bg
-write_port "Cloud Restore"   "cloud restore"            1200  bg
-write_port "Cloud Status"    "cloud status"             10    tty
-write_port "Cloud Catalog"   "cloud catalog"            300   tty
-write_port "Kodi Setup"      "kodi setup"               60    tty
-write_port "Update"          "self-update"              180   tty
-write_port "File Browser"    "serve"                    none  bg
-write_port "Install Main Menu" "install-main-menu"      30    tty
+write_port "Doctor"          "doctor"                            30    tty
+write_port "Hardware"        "hardware snapshot --pretty --save" 30    tty
+write_port "Scan ROMs"       "scan"                              300   tty
+write_port "Extract ROMs"    "extract-roms"                      600   tty
+write_port "Compress ROMs"   "compress-roms"                     1800  tty
+write_port "Restore Backup"  "restore-tar"                       none  tty
+write_port "Cleanup"         "cleanup"                           120   tty
+write_port "Cloud Setup"     "cloud setup"                       600   tty
+write_port "Cloud Backup"    "cloud backup"                      1200  bg
+write_port "Cloud Restore"   "cloud restore"                     1200  bg
+write_port "Cloud Catalog"   "cloud catalog"                     300   tty
+write_port "Kodi Setup"      "kodi setup"                        60    tty
+write_port "Update"          "self-update"                       180   tty
 
-# Autosync triple: Status / Enable / Disable
-write_port "Autosync Status" "status"                   10    tty
-
+# Autosync Enable / Disable (Status is now part of Doctor)
 cat > "$PORTS_DIR/Playora Autosync Enable.sh" <<'EOF'
 #!/bin/sh
 SETSID=$(command -v setsid 2>/dev/null)
@@ -344,7 +338,7 @@ fi
 
 CFG="$PLAYORA_DIR/agent.toml"
 if [ ! -f "$CFG" ]; then
-    SERVER_URL="${PLAYORA_SERVER_URL:-http://192.168.3.82:8080}"
+    SERVER_URL="${PLAYORA_SERVER_URL:-auto}"
     DEVICE_ID="dev_$(uuidgen | tr -d '-' | tr 'A-Z' 'a-z' | cut -c1-32)"
     cat > "$CFG" <<EOF
 device_id = "$DEVICE_ID"
@@ -415,13 +409,10 @@ desc_for() {
         "Cloud Status") echo "Print rclone version + configured remotes.";;
         "Cloud Catalog") echo "Refresh the cloud ROM catalog from gdrive (lsjson + post). Lets the dashboard show every ROM you own across systems with one-click Download.";;
         "Kodi Setup") echo "Enable curated Kodi addons (YouTube, Jellyfin, IPTV Simple, IAGL) via JSON-RPC.";;
-        "Update") echo "Self-update the agent from the GitHub release.";;
-        "Autosync Status") echo "Show the autosync service status, pending events, and last sync time.";;
-        "Autosync Enable") echo "Install + start the autosync systemd service so events sync continuously.";;
+        "Update") echo "Self-update the agent from the GitHub release. After it finishes, the new ports + features appear on next ES reload.";;
+        "Autosync Enable") echo "Install + start the autosync systemd service so events sync continuously and the file browser + game-session tracker run in the background.";;
         "Autosync Disable") echo "Stop + disable the autosync service.";;
         "Recover") echo "Emergency: kill agent processes, clear locks, restart EmulationStation.";;
-        "File Browser") echo "Start the on-device file server on :7878. Open the link on the dashboard Device page to browse /roms, upload (ZIPs auto-extract), download.";;
-        "Install Main Menu") echo "Register the Playora tile in the EmulationStation Main Menu (edits es_systems.cfg with sudo, backs up first).";;
         *) echo "Playora command: $1.";;
     esac
 }
@@ -454,55 +445,32 @@ XML
 
 write_gamelist "$PORTS_DIR"
 
-# Main Menu integration: mirror the Playora ports into /roms/playora/ so a
-# top-level "Playora" tile appears next to NES, SNES, etc. Same scripts —
-# no duplication of logic, only the directory listing differs.
-PLAYORA_SYS_DIR="$SD/playora"
-mkdir -p "$PLAYORA_SYS_DIR"
-# Sweep + copy current ports into the system folder.
-find "$PLAYORA_SYS_DIR" -maxdepth 1 -type f \( -name "Playora *.sh" -o -name "Playora *.png" \) -delete 2>/dev/null || true
-for sh in "$PORTS_DIR"/Playora\ *.sh; do
-    [ -f "$sh" ] || continue
-    cp "$sh" "$PLAYORA_SYS_DIR/"
-    base="$(basename "$sh")"
-    name_only="$(basename "$sh" .sh)"
-    png="$PORTS_DIR/${name_only}.png"
-    [ -f "$png" ] && cp "$png" "$PLAYORA_SYS_DIR/"
-done
-write_gamelist "$PLAYORA_SYS_DIR"
-echo "[install] mirrored ports into $PLAYORA_SYS_DIR"
-
-# Try to register the Playora system in es_systems.cfg. dArkOSRE typical
-# locations — bail silently if we can't find one (the Ports menu still works).
+# Clean up any leftover /roms/playora/ mirror + es_systems.cfg edits from v0.2.
+# Playora lives in /roms/ports/ like PortMaster / ThemeMaster.
+if [ -d "$SD/playora" ]; then
+    rm -rf "$SD/playora"
+    echo "[install] removed legacy /roms/playora/ mirror"
+fi
 for ES_CFG in \
     "$SD/configs/emulationstation/es_systems.cfg" \
     "$SD/system/configs/emulationstation/es_systems.cfg" \
     "$SD/.system/configs/emulationstation/es_systems.cfg" \
     "$SD/.r36s-smart/es_systems.cfg" \
     "$SD/configs/es_systems.cfg"; do
-    if [ -f "$ES_CFG" ]; then
-        if grep -q '<name>playora</name>' "$ES_CFG"; then
-            echo "[install] playora system already present in $ES_CFG"
-            break
-        fi
-        cp "$ES_CFG" "${ES_CFG}.playora-bak"
-        # Insert our block before the closing </systemList>.
+    if [ -f "$ES_CFG" ] && grep -q '<name>playora</name>' "$ES_CFG"; then
+        # Reverse the v0.2 merge — drop our system block.
+        cp "$ES_CFG" "${ES_CFG}.playora-bak-uninstall"
         awk '
-            /<\/systemList>/ && !done {
-                print "  <system>"
-                print "    <name>playora</name>"
-                print "    <fullname>Playora</fullname>"
-                print "    <path>/roms/playora</path>"
-                print "    <extension>.sh .SH</extension>"
-                print "    <command>%ROM%</command>"
-                print "    <theme>playora</theme>"
-                print "  </system>"
-                done = 1
+            /<system>/ { buf = $0; in_sys = 1; next }
+            in_sys && /<name>playora<\/name>/ { drop = 1 }
+            in_sys && /<\/system>/ {
+                if (!drop) print buf;
+                buf = ""; in_sys = 0; drop = 0; next
             }
+            in_sys { buf = buf "\n" $0; next }
             { print }
-        ' "${ES_CFG}.playora-bak" > "$ES_CFG"
-        echo "[install] added playora system to $ES_CFG"
-        break
+        ' "${ES_CFG}.playora-bak-uninstall" > "$ES_CFG"
+        echo "[install] removed legacy playora system block from $ES_CFG"
     fi
 done
 
