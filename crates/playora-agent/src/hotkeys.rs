@@ -625,6 +625,20 @@ fn drastic_entry() -> EmulatorEntry {
     .into_iter()
     .find(|p| Path::new(p).is_file())
     .map(|s| s.to_string());
+
+    // DraStic ships INI-style sections like [controls_a] / [controls_b].
+    // Best-effort parse: surface a handful of well-known keys without
+    // trying to translate SDL keycodes (which would be a moving target).
+    let drastic = cfg_path
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    let ctrl = parse_ini_section(&drastic, "controls_a");
+    let menu = parse_ini_section(&drastic, "menu");
+    let lookup = |section_map: &BTreeMap<String, String>, key: &str| -> Option<String> {
+        section_map.get(key).map(|raw| format!("device:key {raw}"))
+    };
+
     EmulatorEntry {
         id: "drastic",
         display_name: "DraStic (Nintendo DS)",
@@ -634,15 +648,22 @@ fn drastic_entry() -> EmulatorEntry {
         how_to_exit: "Press Select + Start to open menu, then choose \"Exit DraStic\". DraStic does NOT honour the RetroArch quit combo.",
         how_to_open_menu: "Select + Start — opens DraStic's main menu.",
         notes: vec![
-            "DraStic is standalone closed-source. No cfg parsing.",
+            "DraStic is standalone closed-source.",
+            "drastic.cfg [controls_a] holds the player-1 mapping (raw SDL device:keycode).",
             "Touch is mapped to right analog by default.",
         ],
         shortcuts: vec![
-            Shortcut { action: "Open menu", description: "Open DraStic's main menu (states, settings, exit).", default_gamepad: "Select + Start", default_keyboard: "—", current: None, scope: "core+game" },
-            Shortcut { action: "Swap screens", description: "Swap top/bottom DS screens layout.", default_gamepad: "L1 + R1 + Select", default_keyboard: "—", current: None, scope: "core+game" },
-            Shortcut { action: "Save state", description: "Quick save the current state.", default_gamepad: "Menu > Save State", default_keyboard: "—", current: None, scope: "save-state" },
-            Shortcut { action: "Load state", description: "Quick load the most recent state.", default_gamepad: "Menu > Load State", default_keyboard: "—", current: None, scope: "save-state" },
-            Shortcut { action: "Toggle fast-forward", description: "Maximum-speed mode.", default_gamepad: "R2", default_keyboard: "—", current: None, scope: "core+game" },
+            Shortcut { action: "Open menu", description: "Open DraStic's main menu (states, settings, exit).", default_gamepad: "Select + Start", default_keyboard: "—", current: lookup(&menu, "show_menu"), scope: "core+game" },
+            Shortcut { action: "Swap screens", description: "Swap top/bottom DS screens layout.", default_gamepad: "L1 + R1 + Select", default_keyboard: "—", current: lookup(&menu, "swap_screens"), scope: "core+game" },
+            Shortcut { action: "Save state", description: "Quick save the current state.", default_gamepad: "Menu > Save State", default_keyboard: "—", current: lookup(&menu, "save_state"), scope: "save-state" },
+            Shortcut { action: "Load state", description: "Quick load the most recent state.", default_gamepad: "Menu > Load State", default_keyboard: "—", current: lookup(&menu, "load_state"), scope: "save-state" },
+            Shortcut { action: "Toggle fast-forward", description: "Maximum-speed mode.", default_gamepad: "R2", default_keyboard: "—", current: lookup(&menu, "fast_forward"), scope: "core+game" },
+            Shortcut { action: "DS button A", description: "DS face button A.", default_gamepad: "A", default_keyboard: "—", current: lookup(&ctrl, "a"), scope: "core+game" },
+            Shortcut { action: "DS button B", description: "DS face button B.", default_gamepad: "B", default_keyboard: "—", current: lookup(&ctrl, "b"), scope: "core+game" },
+            Shortcut { action: "DS button X", description: "DS face button X.", default_gamepad: "X", default_keyboard: "—", current: lookup(&ctrl, "x"), scope: "core+game" },
+            Shortcut { action: "DS button Y", description: "DS face button Y.", default_gamepad: "Y", default_keyboard: "—", current: lookup(&ctrl, "y"), scope: "core+game" },
+            Shortcut { action: "DS L shoulder", description: "Left shoulder.", default_gamepad: "L1", default_keyboard: "—", current: lookup(&ctrl, "l"), scope: "core+game" },
+            Shortcut { action: "DS R shoulder", description: "Right shoulder.", default_gamepad: "R1", default_keyboard: "—", current: lookup(&ctrl, "r"), scope: "core+game" },
         ],
     }
 }
@@ -653,6 +674,20 @@ fn mupen64plus_entry() -> EmulatorEntry {
         .into_iter()
         .find(|p| Path::new(p).is_file())
         .map(|s| s.to_string());
+
+    // mupen64plus.cfg is INI with [CoreEvents] for emu actions and
+    // [Input-SDL-Control1] for player-1 mapping. Values look like
+    // "Kbd_Mapping_Reset = 0" or "DPad U = button(0)" so we just surface
+    // them verbatim — the user gets to see whatever upstream wrote.
+    let cfg = cfg_path
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    let events = parse_ini_section(&cfg, "CoreEvents");
+    let player1 = parse_ini_section(&cfg, "Input-SDL-Control1");
+    let kbd = |key: &str| events.get(key).cloned();
+    let pad = |key: &str| player1.get(key).cloned();
+
     EmulatorEntry {
         id: "mupen64plus",
         display_name: "Mupen64Plus (N64 standalone)",
@@ -663,6 +698,7 @@ fn mupen64plus_entry() -> EmulatorEntry {
         how_to_open_menu: "No in-game menu — quit and relaunch to change settings.",
         notes: vec![
             "RetroArch's mupen64plus_next core is usually a better choice on R36S.",
+            "[CoreEvents] holds the emu-level shortcuts; [Input-SDL-Control1] holds player 1.",
             "If exit freezes, run `playora-agent recover`.",
         ],
         shortcuts: vec![
@@ -671,7 +707,7 @@ fn mupen64plus_entry() -> EmulatorEntry {
                 description: "Exit the emulator.",
                 default_gamepad: "Select + Start (via gptokeyb)",
                 default_keyboard: "ESC",
-                current: None,
+                current: kbd("Kbd Mapping Stop"),
                 scope: "core+game",
             },
             Shortcut {
@@ -679,7 +715,7 @@ fn mupen64plus_entry() -> EmulatorEntry {
                 description: "Quick save state.",
                 default_gamepad: "—",
                 default_keyboard: "F5",
-                current: None,
+                current: kbd("Kbd Mapping Save State"),
                 scope: "save-state",
             },
             Shortcut {
@@ -687,7 +723,7 @@ fn mupen64plus_entry() -> EmulatorEntry {
                 description: "Quick load state.",
                 default_gamepad: "—",
                 default_keyboard: "F7",
-                current: None,
+                current: kbd("Kbd Mapping Load State"),
                 scope: "save-state",
             },
             Shortcut {
@@ -695,7 +731,7 @@ fn mupen64plus_entry() -> EmulatorEntry {
                 description: "Save screenshot.",
                 default_gamepad: "—",
                 default_keyboard: "F12",
-                current: None,
+                current: kbd("Kbd Mapping Screenshot"),
                 scope: "core+game",
             },
             Shortcut {
@@ -703,8 +739,72 @@ fn mupen64plus_entry() -> EmulatorEntry {
                 description: "Switch fullscreen.",
                 default_gamepad: "—",
                 default_keyboard: "Alt+Enter",
-                current: None,
+                current: kbd("Kbd Mapping Fullscreen"),
                 scope: "core",
+            },
+            Shortcut {
+                action: "Toggle fast-forward",
+                description: "Maximum-speed mode.",
+                default_gamepad: "—",
+                default_keyboard: "F11",
+                current: kbd("Kbd Mapping Fast Forward"),
+                scope: "core+game",
+            },
+            Shortcut {
+                action: "Reset emulator",
+                description: "Soft reset the N64 core.",
+                default_gamepad: "—",
+                default_keyboard: "F1",
+                current: kbd("Kbd Mapping Reset"),
+                scope: "core+game",
+            },
+            Shortcut {
+                action: "N64 A button",
+                description: "N64 A face button.",
+                default_gamepad: "A",
+                default_keyboard: "—",
+                current: pad("A Button"),
+                scope: "core+game",
+            },
+            Shortcut {
+                action: "N64 B button",
+                description: "N64 B face button.",
+                default_gamepad: "B",
+                default_keyboard: "—",
+                current: pad("B Button"),
+                scope: "core+game",
+            },
+            Shortcut {
+                action: "N64 Start",
+                description: "N64 Start button.",
+                default_gamepad: "Start",
+                default_keyboard: "—",
+                current: pad("Start"),
+                scope: "core+game",
+            },
+            Shortcut {
+                action: "N64 Z trigger",
+                description: "Underside Z trigger.",
+                default_gamepad: "L2",
+                default_keyboard: "—",
+                current: pad("Z Trig"),
+                scope: "core+game",
+            },
+            Shortcut {
+                action: "N64 L shoulder",
+                description: "Top-left shoulder.",
+                default_gamepad: "L1",
+                default_keyboard: "—",
+                current: pad("L Trig"),
+                scope: "core+game",
+            },
+            Shortcut {
+                action: "N64 R shoulder",
+                description: "Top-right shoulder.",
+                default_gamepad: "R1",
+                default_keyboard: "—",
+                current: pad("R Trig"),
+                scope: "core+game",
             },
         ],
     }
