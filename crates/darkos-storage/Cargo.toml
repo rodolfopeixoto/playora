@@ -1,0 +1,11 @@
+[package]
+name = "darkos-storage"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+darkos-core.workspace = true
+serde.workspace = true
+bytesize.workspace = true
+anyhow.workspace = true

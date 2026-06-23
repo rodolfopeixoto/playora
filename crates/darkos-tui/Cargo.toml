@@ -1,0 +1,22 @@
+[package]
+name = "darkos-tui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+darkos-core.workspace = true
+darkos-hw.workspace = true
+darkos-db.workspace = true
+darkos-storage.workspace = true
+darkos-roms.workspace = true
+darkos-saves.workspace = true
+darkos-firmware.workspace = true
+darkos-themes.workspace = true
+darkos-update.workspace = true
+darkos-perf.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+bytesize.workspace = true

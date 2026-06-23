@@ -505,6 +505,167 @@ dependencies = [
 ]
 
 [[package]]
+name = "darkos-cli"
+version = "0.4.5"
+dependencies = [
+ "anyhow",
+ "bytesize",
+ "clap",
+ "darkos-core",
+ "darkos-db",
+ "darkos-firmware",
+ "darkos-hw",
+ "darkos-perf",
+ "darkos-roms",
+ "darkos-saves",
+ "darkos-storage",
+ "darkos-themes",
+ "darkos-tui",
+ "darkos-update",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "darkos-core"
+version = "0.4.5"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "darkos-db"
+version = "0.4.5"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "darkos-core",
+ "darkos-hw",
+ "rusqlite",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "darkos-firmware"
+version = "0.4.5"
+dependencies = [
+ "anyhow",
+ "darkos-core",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "darkos-hw"
+version = "0.4.5"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "darkos-core",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "thiserror",
+]
+
+[[package]]
+name = "darkos-perf"
+version = "0.4.5"
+dependencies = [
+ "anyhow",
+ "darkos-core",
+ "serde",
+]
+
+[[package]]
+name = "darkos-roms"
+version = "0.4.5"
+dependencies = [
+ "anyhow",
+ "bytesize",
+ "darkos-core",
+ "darkos-db",
+ "darkos-storage",
+ "hex",
+ "indicatif",
+ "serde",
+ "serde_json",
+ "sha2",
+ "ureq",
+ "walkdir",
+]
+
+[[package]]
+name = "darkos-saves"
+version = "0.4.5"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "darkos-core",
+ "walkdir",
+]
+
+[[package]]
+name = "darkos-storage"
+version = "0.4.5"
+dependencies = [
+ "anyhow",
+ "bytesize",
+ "darkos-core",
+ "serde",
+]
+
+[[package]]
+name = "darkos-themes"
+version = "0.4.5"
+dependencies = [
+ "anyhow",
+ "darkos-core",
+ "serde",
+ "ureq",
+]
+
+[[package]]
+name = "darkos-tui"
+version = "0.4.5"
+dependencies = [
+ "anyhow",
+ "bytesize",
+ "crossterm",
+ "darkos-core",
+ "darkos-db",
+ "darkos-firmware",
+ "darkos-hw",
+ "darkos-perf",
+ "darkos-roms",
+ "darkos-saves",
+ "darkos-storage",
+ "darkos-themes",
+ "darkos-update",
+ "ratatui",
+ "serde_json",
+]
+
+[[package]]
+name = "darkos-update"
+version = "0.4.5"
+dependencies = [
+ "anyhow",
+ "darkos-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "ureq",
+]
+
+[[package]]
 name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1017,7 +1178,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
+ "webpki-roots 1.0.8",
 ]
 
 [[package]]
@@ -2066,7 +2227,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
+ "webpki-roots 1.0.8",
 ]
 
 [[package]]
@@ -2136,6 +2297,7 @@ version = "0.23.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef86cd5876211988985292b91c96a8f2d298df24e75989a43a3c73f2d4d8168b"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -2949,6 +3111,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
+name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64",
+ "flate2",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "url",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3121,6 +3301,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.8",
 ]
 
 [[package]]

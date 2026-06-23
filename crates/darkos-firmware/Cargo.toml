@@ -1,0 +1,12 @@
+[package]
+name = "darkos-firmware"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+darkos-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true
+anyhow.workspace = true

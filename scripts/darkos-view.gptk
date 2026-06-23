@@ -1,0 +1,17 @@
+back = esc
+start = enter
+guide = ctrl+c
+
+dpup = up
+dpdown = down
+dpleft = pageup
+dpright = pagedown
+
+l1 = pageup
+r1 = pagedown
+l2 = home
+r2 = end
+
+a = "f"
+y = "/"
+x = "n"
