@@ -81,31 +81,133 @@ pub fn cmd_enable() -> Result<()> {
 
 pub fn cmd_recover() -> Result<()> {
     use crate::ttyui::{self, Status};
+    use chrono::Utc;
+    use playora_common::*;
+    let started_at = Utc::now();
     ttyui::header("Recover");
+
     ttyui::section("Killing stale processes");
-    let _ = Command::new("sudo")
-        .args(["killall", "-9", "playora-agent"])
-        .status();
-    ttyui::row("playora-agent", "killed", Status::Ok);
-    let _ = Command::new("sudo")
-        .args(["killall", "-9", "gptokeyb"])
-        .status();
-    ttyui::row("gptokeyb", "killed", Status::Ok);
-    let _ = std::fs::remove_file("/tmp/playora-scan.lock");
-    let _ = std::fs::remove_file("/tmp/playora-extract-roms.lock");
-    let _ = std::fs::remove_file("/tmp/playora-compress-roms.lock");
-    let _ = std::fs::remove_file("/tmp/playora-cleanup.lock");
-    let _ = std::fs::remove_file("/tmp/playora-cloud-setup.lock");
-    let _ = std::fs::remove_file("/tmp/playora-cloud-backup.lock");
-    let _ = std::fs::remove_file("/tmp/playora-cloud-restore.lock");
-    let _ = std::fs::remove_file("/tmp/playora-cloud-catalog.lock");
-    let _ = std::fs::remove_file("/tmp/playora-fetch-covers.lock");
-    let _ = std::fs::remove_file("/tmp/playora-restore-tar.lock");
-    let _ = std::fs::remove_file("/tmp/playora-cloud-download.lock");
-    ttyui::row("locks", "cleared", Status::Ok);
+    let mut killed = Vec::new();
+    for proc in ["playora-agent", "gptokeyb", "gptokeyb2"] {
+        let _ = Command::new("sudo").args(["killall", "-9", proc]).status();
+        ttyui::row(proc, "killed (best-effort)", Status::Ok);
+        killed.push(proc.to_string());
+    }
+
+    ttyui::section("Sweeping lockfiles");
+    let mut cleared = 0u32;
+    if let Ok(rd) = std::fs::read_dir("/tmp") {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            let Some(name) = p.file_name().and_then(|f| f.to_str()) else {
+                continue;
+            };
+            if name.starts_with("playora-") && name.ends_with(".lock") {
+                if std::fs::remove_file(&p).is_ok() {
+                    cleared += 1;
+                }
+            }
+        }
+    }
+    ttyui::row("locks cleared", &cleared.to_string(), Status::Ok);
+
+    ttyui::section("TTY / framebuffer");
+    let tty_ok =
+        std::path::Path::new("/dev/tty1").exists() || std::path::Path::new("/dev/tty0").exists();
+    ttyui::row(
+        "tty",
+        if tty_ok { "present" } else { "MISSING" },
+        if tty_ok { Status::Ok } else { Status::Fail },
+    );
+
+    ttyui::section("Restarting EmulationStation");
+    let (es_ok, es_method) = restart_emulationstation();
+    ttyui::row(
+        "method",
+        &es_method,
+        if es_ok { Status::Ok } else { Status::Warn },
+    );
+
+    // Best-effort event emission — don't fail recover if DB or sync is broken.
+    let now = Utc::now();
+    if let Ok(cfg) = crate::cfg::load(None) {
+        if let Ok(conn) = crate::db::open(&crate::cfg::db_path()) {
+            let elapsed = (now - started_at).num_seconds().max(0) as u64;
+            let bsr = BlackScreenRecovered {
+                triggered_by: "playora-agent recover".into(),
+                duration_seconds: elapsed,
+                es_restarted: es_ok,
+                killed_processes: killed,
+                captured_at: now,
+            };
+            let _ = crate::db::enqueue(
+                &conn,
+                &Event {
+                    event_id: EventId::new(),
+                    device_id: cfg.device_id.clone(),
+                    created_at: now,
+                    payload: EventPayload::BlackScreenRecovered(bsr),
+                },
+            );
+            let _ = crate::db::enqueue(
+                &conn,
+                &Event {
+                    event_id: EventId::new(),
+                    device_id: cfg.device_id.clone(),
+                    created_at: now,
+                    payload: EventPayload::EmulationStationRestarted(EmulationStationRestarted {
+                        reason: "recover".into(),
+                        method: es_method,
+                        captured_at: now,
+                    }),
+                },
+            );
+        }
+    }
+
     println!();
-    println!("SUMMARY: Recover ok — ES restart on exit.");
+    println!("SUMMARY: Recover ok — ES restart attempted.");
     Ok(())
+}
+
+fn restart_emulationstation() -> (bool, String) {
+    let units = ["emulationstation", "emustation", "oga_es"];
+    let mut detected: Option<&str> = None;
+    if let Ok(out) = Command::new("systemctl")
+        .args(["list-unit-files", "--no-legend"])
+        .output()
+    {
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        for u in &units {
+            if text.lines().any(|l| l.starts_with(&format!("{u}.service"))) {
+                detected = Some(*u);
+                break;
+            }
+        }
+    }
+    if let Some(u) = detected {
+        let s = Command::new("sudo")
+            .args(["systemctl", "restart", &format!("{u}.service")])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if s {
+            return (true, format!("systemd:{u}"));
+        }
+    }
+    // Fallback exec if no service detected or restart failed.
+    if Command::new("which")
+        .arg("emulationstation")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        let _ = Command::new("sh")
+            .args(["-c", "nohup emulationstation </dev/null >/dev/null 2>&1 &"])
+            .status();
+        return (true, "exec:emulationstation".into());
+    }
+    (false, "none".into())
 }
 
 pub fn cmd_disable() -> Result<()> {

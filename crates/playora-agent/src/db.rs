@@ -23,8 +23,52 @@ pub fn open(path: &Path) -> Result<Connection> {
         c.execute_batch(p)?;
     }
     c.execute_batch(SCHEMA)?;
+    apply_migrations(&c)?;
     Ok(c)
 }
+
+/// Versioned migration runner. Schema bootstraps via `CREATE TABLE IF NOT
+/// EXISTS` in `SCHEMA`; each migration here is a delta on top. New
+/// migrations append to MIGRATIONS — never reorder or rewrite history.
+fn apply_migrations(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL,
+            note TEXT
+         );",
+    )?;
+    let current: i32 = c
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    for (v, note, sql) in MIGRATIONS {
+        if *v > current {
+            c.execute_batch(sql)?;
+            c.execute(
+                "INSERT INTO schema_migrations(version, applied_at, note) VALUES (?1, ?2, ?3)",
+                params![v, Utc::now().to_rfc3339(), note],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+const MIGRATIONS: &[(i32, &str, &str)] = &[
+    (
+        1,
+        "initial bootstrap marker (schema already created via CREATE IF NOT EXISTS)",
+        "-- no-op (records schema baseline)",
+    ),
+    (
+        2,
+        "sprint-1 event types — system_issue_detected, doctor_report, rom_audit_result, script_started/finished, session crashed/orphaned, save_changed, black_screen_recovered, es_restarted",
+        "-- no-op: events_outbox.event_type is free-text, no DDL needed",
+    ),
+];
 
 pub fn enqueue(conn: &Connection, ev: &Event) -> Result<()> {
     conn.execute(
@@ -116,6 +160,18 @@ fn event_type_str(p: &playora_common::EventPayload) -> &'static str {
         Activity(_) => "activity",
         RestoreProgress(_) => "restore_progress",
         GameMetadata(_) => "game_metadata",
+        SystemIssueDetected(_) => "system_issue_detected",
+        DoctorReport(_) => "doctor_report",
+        RomAuditResult(_) => "rom_audit_result",
+        ScriptStarted(_) => "script_started",
+        ScriptFinished(_) => "script_finished",
+        GameSessionCrashed(_) => "game_session_crashed",
+        GameSessionOrphaned(_) => "game_session_orphaned",
+        SaveChanged(_) => "save_changed",
+        BlackScreenRecovered(_) => "black_screen_recovered",
+        EmulationStationRestarted(_) => "emulation_station_restarted",
+        NetplayRoomCreated(_) => "netplay_room_created",
+        NetplayRoomJoined(_) => "netplay_room_joined",
     }
 }
 
