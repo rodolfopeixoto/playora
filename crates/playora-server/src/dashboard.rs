@@ -1431,6 +1431,11 @@ fn nav_tabs(device_id: &str, active: &str) -> String {
             format!("/dashboard/device/{device_id}/doctor"),
         ),
         (
+            "sessions",
+            "Sessions",
+            format!("/dashboard/device/{device_id}/sessions"),
+        ),
+        (
             "games",
             "Games",
             format!("/dashboard/device/{device_id}/games"),
@@ -1445,10 +1450,17 @@ fn nav_tabs(device_id: &str, active: &str) -> String {
     out
 }
 
+#[derive(Deserialize)]
+pub struct IssuesQuery {
+    pub sev: Option<String>,
+}
+
 pub async fn device_issues_page(
     AxState(state): AxState<State>,
     AxPath(id): AxPath<String>,
+    axum::extract::Query(q): axum::extract::Query<IssuesQuery>,
 ) -> Html<String> {
+    let filter = q.sev.as_deref().map(|s| s.to_ascii_lowercase());
     let conn = state.lock().await;
     let mut rows_html = String::new();
     let mut by_sev = (0u32, 0u32, 0u32); // critical, warning, info
@@ -1486,6 +1498,11 @@ pub async fn device_issues_page(
                     "warning" => by_sev.1 += 1,
                     _ => by_sev.2 += 1,
                 }
+                if let Some(f) = &filter {
+                    if sev != f {
+                        continue;
+                    }
+                }
                 rows_html.push_str(&format!(
                     "<tr><td><span class=\"badge {}\">{}</span></td>\
                      <td>{}<br/><code>{}</code></td>\
@@ -1513,19 +1530,114 @@ pub async fn device_issues_page(
         }
     }
     let tabs = nav_tabs(&id, "issues");
+    let filter_label = filter
+        .as_deref()
+        .map(|f| format!(" (filtered: {f})"))
+        .unwrap_or_default();
     let html = format!(
         "<!doctype html><html><head><title>Issues — {id}</title>{TAB_STYLE}</head><body>\
-         <h1>Device {id} — Issues</h1>{tabs}\
+         <h1>Device {id} — Issues{filter_label}</h1>{tabs}\
          <div class=\"card\">\
-           <span class=\"badge critical\">critical: {}</span> \
-           <span class=\"badge warning\">warning: {}</span> \
-           <span class=\"badge info\">info: {}</span>\
+           <a href=\"?sev=critical\"><span class=\"badge critical\">critical: {}</span></a> \
+           <a href=\"?sev=warning\"><span class=\"badge warning\">warning: {}</span></a> \
+           <a href=\"?sev=info\"><span class=\"badge info\">info: {}</span></a> \
+           <a href=\"./issues\" class=\"muted\">clear filter</a>\
          </div>\
          <table><thead><tr><th>Severity</th><th>Title / Code</th><th>Evidence</th><th>Suggested fix</th><th>When</th></tr></thead>\
          <tbody>{rows_html}</tbody></table></body></html>",
         by_sev.0, by_sev.1, by_sev.2,
     );
     Html(html)
+}
+
+pub async fn device_sessions_page(
+    AxState(state): AxState<State>,
+    AxPath(id): AxPath<String>,
+) -> Html<String> {
+    let conn = state.lock().await;
+    let mut rows = String::new();
+    let mut total_secs: i64 = 0;
+    let mut count: u32 = 0;
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT COALESCE(game_name,'?'), COALESCE(system,'?'), COALESCE(core,''),
+                COALESCE(started_at,''), COALESCE(ended_at,''),
+                COALESCE(duration_seconds,0), COALESCE(save_changed,0),
+                COALESCE(max_cpu_percent,0.0), COALESCE(max_memory_mb,0)
+         FROM game_sessions WHERE device_id=?1 ORDER BY id DESC LIMIT 200",
+    ) {
+        let rs = stmt
+            .query_map([&id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, f64>(7)?,
+                    r.get::<_, i64>(8)?,
+                ))
+            })
+            .ok();
+        if let Some(rs) = rs {
+            for (name, system, core, started, _ended, dur, save_changed, cpu, mem) in rs.flatten() {
+                total_secs += dur;
+                count += 1;
+                rows.push_str(&format!(
+                    "<tr><td>{}</td><td><code>{}</code></td><td><code>{}</code></td>\
+                     <td>{}</td><td>{}</td>\
+                     <td>{}</td><td>{:.1}%</td><td>{} MiB</td></tr>",
+                    esc(&name),
+                    esc(&system),
+                    esc(&core),
+                    esc(&relative_time(&started)),
+                    fmt_dur(dur),
+                    if save_changed > 0 {
+                        "<span class=\"badge info\">yes</span>"
+                    } else {
+                        "—"
+                    },
+                    cpu,
+                    mem,
+                ));
+            }
+        }
+    }
+    // Counts of crashes / orphans / black-screen for this device.
+    let crashed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE device_id=?1 AND event_type='game_session_crashed'",
+            [&id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let orphaned: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE device_id=?1 AND event_type='game_session_orphaned'",
+            [&id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let bsr: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE device_id=?1 AND event_type='black_screen_recovered'",
+            [&id], |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let tabs = nav_tabs(&id, "sessions");
+    Html(format!(
+        "<!doctype html><html><head><title>Sessions — {id}</title>{TAB_STYLE}</head><body>\
+         <h1>Device {id} — Sessions</h1>{tabs}\
+         <div class=\"card\">{count} session(s) · total playtime {} · \
+           <span class=\"badge warning\">crashed: {crashed}</span> \
+           <span class=\"badge warning\">orphaned: {orphaned}</span> \
+           <span class=\"badge critical\">black-screen recovered: {bsr}</span>\
+         </div>\
+         <table><thead><tr><th>Game</th><th>System</th><th>Core</th><th>Started</th><th>Duration</th><th>Save changed</th><th>Peak CPU</th><th>Peak mem</th></tr></thead>\
+         <tbody>{rows}</tbody></table></body></html>",
+        fmt_dur(total_secs)
+    ))
 }
 
 pub async fn device_rom_audit_page(

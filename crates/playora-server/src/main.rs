@@ -212,6 +212,10 @@ async fn main() -> Result<()> {
             "/dashboard/device/:id/doctor",
             get(dashboard::device_doctor_page),
         )
+        .route(
+            "/dashboard/device/:id/sessions",
+            get(dashboard::device_sessions_page),
+        )
         .with_state(state)
         .layer(TraceLayer::new_for_http());
 
