@@ -67,17 +67,52 @@ $ESUDO chmod 666 /dev/tty1 /dev/uinput 2>/dev/null || true
 printf '\033c' > /dev/tty1
 exec </dev/tty1 >/dev/tty1 2>&1
 
+# Find gptokeyb in the locations dArkOSRE / PortMaster install it. Without
+# this, `dialog` waits forever for keyboard input that the gamepad never
+# produces. Match PortMaster's pattern exactly.
+GPTOKEYB_BIN=""
+for c in \
+    /opt/system/Tools/PortMaster/gptokeyb/gptokeyb \
+    /opt/tools/PortMaster/gptokeyb/gptokeyb \
+    /roms/ports/PortMaster/gptokeyb/gptokeyb \
+    /usr/local/bin/gptokeyb \
+    /usr/bin/gptokeyb; do
+    [ -x "$c" ] && GPTOKEYB_BIN="$c" && break
+done
+
+KEYS_GPTK="/roms/.playora/keys.gptk"
+GPTOKEYB_PID=""
+start_gptokeyb() {
+    if [ -n "$GPTOKEYB_BIN" ] && [ -f "$KEYS_GPTK" ]; then
+        # Kill any pre-existing instance so we own the input device.
+        $ESUDO killall -9 gptokeyb 2>/dev/null
+        $ESUDO killall -9 gptokeyb2 2>/dev/null
+        SDL_GAMECONTROLLERCONFIG_FILE="" "$GPTOKEYB_BIN" -1 "playora" \
+            -c "$KEYS_GPTK" </dev/null >/dev/null 2>&1 &
+        GPTOKEYB_PID=$!
+    fi
+}
+stop_gptokeyb() {
+    [ -n "$GPTOKEYB_PID" ] && kill "$GPTOKEYB_PID" 2>/dev/null
+    $ESUDO killall -9 gptokeyb 2>/dev/null
+    $ESUDO killall -9 gptokeyb2 2>/dev/null
+}
+
 trap '
+    stop_gptokeyb
     $AGENT activity-end "$NAME" "${END_RC:-1}" --log "$LOG" >/dev/null 2>&1 || true
     $AGENT sync >/dev/null 2>&1 || true
 ' EXIT INT TERM
 
 restart_es() {
+    stop_gptokeyb
     clear > /dev/tty1
     $ESUDO systemctl restart emulationstation 2>/dev/null \
         || $ESUDO systemctl restart emustation 2>/dev/null \
         || true
 }
+
+start_gptokeyb
 
 printf '\033[1;35m╔══════════════════════════════════════════════════════╗\n'
 printf '║  \033[1;37mPLAYORA · %-43s\033[1;35m║\n' "$NAME"
@@ -237,6 +272,34 @@ write_port "Autosync Enable"  "autosync-enable"  60   tty
 write_port "Autosync Disable" "autosync-disable" 30   tty
 
 write_port "Recover" "recover" 30 tty
+
+# Default gptokeyb mapping so dialog menus respond to the gamepad.
+# Mirrors PortMaster's defaults: A=Enter, B=Esc, D-Pad=arrows, Start=Enter,
+# Select=Tab. Override per-port by dropping a custom keys.gptk in
+# /roms/.playora/ (port-runner picks up the same file).
+KEYS_GPTK="$PLAYORA_DIR/keys.gptk"
+cat > "$KEYS_GPTK" <<'EOF'
+back = esc
+guide = enter
+a = enter
+b = esc
+x = backspace
+y = space
+start = enter
+select = tab
+l1 = pageup
+r1 = pagedown
+l2 = home
+r2 = end
+left_analog_up = up
+left_analog_down = down
+left_analog_left = left
+left_analog_right = right
+dpup = up
+dpdown = down
+dpleft = left
+dpright = right
+EOF
 
 QUEUE="$PLAYORA_DIR/delete_queue.txt"
 if [ ! -f "$QUEUE" ]; then
