@@ -68,6 +68,18 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
         "sprint-1 event types — system_issue_detected, doctor_report, rom_audit_result, script_started/finished, session crashed/orphaned, save_changed, black_screen_recovered, es_restarted",
         "-- no-op: events_outbox.event_type is free-text, no DDL needed",
     ),
+    (
+        3,
+        "file_hashes — full sha256 cache keyed by (path,size,mtime) so audit --hash is incremental",
+        "CREATE TABLE IF NOT EXISTS file_hashes (
+            path TEXT PRIMARY KEY,
+            file_size INTEGER NOT NULL,
+            mtime INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            computed_at TEXT NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS idx_file_hashes_sha ON file_hashes(sha256);",
+    ),
 ];
 
 pub fn enqueue(conn: &Connection, ev: &Event) -> Result<()> {

@@ -501,46 +501,68 @@ fn scan_missing_bios(root: &Path) -> Vec<String> {
     missing
 }
 
-/// SHA-256 a file, caching by (path, size) in the agent SQLite `games`
-/// table. Reuses the scanner's `rom_hash` column when size matches; falls
-/// back to a quick partial hash (first + last 256 KiB) on huge files so a
-/// full audit doesn't read tens of GB.
+/// Full SHA-256 with an on-disk cache keyed by (path, size, mtime). Cache
+/// table is created by migration v3. Re-runs are near-instant; first run
+/// streams the file through Sha256 in 1 MiB chunks regardless of size.
 fn hash_with_cache(path: &Path, size: u64) -> Option<String> {
     use sha2::{Digest, Sha256};
-    use std::io::{Read, Seek, SeekFrom};
+    use std::io::Read;
 
     let rom_path = path.display().to_string();
-    if let Ok(conn) = crate::db::open(&crate::cfg::db_path()) {
-        let cached: Option<(String, i64)> = conn
+    let mtime = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let conn_opt = crate::db::open(&crate::cfg::db_path()).ok();
+    if let Some(conn) = conn_opt.as_ref() {
+        let cached: Option<(i64, i64, String)> = conn
             .query_row(
-                "SELECT COALESCE(rom_hash,''), COALESCE(file_size,0) FROM games WHERE rom_path=?1",
+                "SELECT file_size, mtime, sha256 FROM file_hashes WHERE path=?1",
                 rusqlite::params![rom_path],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .ok();
-        if let Some((h, sz)) = cached {
-            if !h.is_empty() && sz as u64 == size {
-                return Some(h);
+        if let Some((csize, cmtime, csha)) = cached {
+            if csize as u64 == size && cmtime == mtime && !csha.is_empty() {
+                return Some(csha);
             }
         }
     }
 
     let mut f = std::fs::File::open(path).ok()?;
     let mut h = Sha256::new();
-    let mut buf = vec![0u8; 256 * 1024];
-    if size <= 4 * 1024 * 1024 {
-        let mut total = Vec::with_capacity(size as usize);
-        f.read_to_end(&mut total).ok()?;
-        h.update(&total);
-    } else {
+    let mut buf = vec![0u8; 1024 * 1024];
+    loop {
         let n = f.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
         h.update(&buf[..n]);
-        f.seek(SeekFrom::End(-(buf.len() as i64))).ok()?;
-        let n = f.read(&mut buf).ok()?;
-        h.update(&buf[..n]);
-        h.update(size.to_le_bytes());
     }
-    Some(hex::encode(h.finalize()))
+    let sha = hex::encode(h.finalize());
+
+    if let Some(conn) = conn_opt.as_ref() {
+        let _ = conn.execute(
+            "INSERT INTO file_hashes(path, file_size, mtime, sha256, computed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(path) DO UPDATE SET
+               file_size=excluded.file_size,
+               mtime=excluded.mtime,
+               sha256=excluded.sha256,
+               computed_at=excluded.computed_at",
+            rusqlite::params![
+                rom_path,
+                size as i64,
+                mtime,
+                sha,
+                chrono::Utc::now().to_rfc3339()
+            ],
+        );
+    }
+    Some(sha)
 }
 
 fn atomic_write(p: &Path, data: &[u8]) -> std::io::Result<()> {
