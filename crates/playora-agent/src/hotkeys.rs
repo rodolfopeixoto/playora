@@ -501,6 +501,21 @@ fn ppsspp_entry() -> EmulatorEntry {
     .into_iter()
     .find(|p| Path::new(p).is_file())
     .map(|s| s.to_string());
+
+    // Parse [ControlMapping] section if controls.ini is present. PPSSPP
+    // stores actions as `ActionName = device-keycode,device-keycode,...`.
+    let mappings = cfg_path
+        .as_ref()
+        .filter(|p| p.ends_with("controls.ini"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|c| parse_ini_section(&c, "ControlMapping"))
+        .unwrap_or_default();
+    let lookup = |action: &str| -> Option<String> {
+        mappings
+            .get(action)
+            .map(|raw| translate_ppsspp_binding(raw))
+    };
+
     EmulatorEntry {
         id: "ppsspp",
         display_name: "PPSSPP (PSP)",
@@ -513,17 +528,92 @@ fn ppsspp_entry() -> EmulatorEntry {
             "Press Select alone — opens the pause / save-state menu.",
         notes: vec![
             "PPSSPP is standalone — RetroArch settings (quit_press_twice etc.) do not apply.",
+            "Bindings below are parsed from PPSSPP controls.ini [ControlMapping] section.",
             "If exit freezes, run `playora-agent recover` from SSH.",
         ],
         shortcuts: vec![
-            Shortcut { action: "Quit emulator", description: "Exit PPSSPP and return to EmulationStation.", default_gamepad: "Select + Start", default_keyboard: "ESC", current: None, scope: "core+game" },
-            Shortcut { action: "Open pause menu", description: "Open the in-game menu (save/load state, settings, etc.).", default_gamepad: "Select", default_keyboard: "ESC", current: None, scope: "core+game" },
-            Shortcut { action: "Save state", description: "Save current state to the active slot.", default_gamepad: "Pause menu > Save State", default_keyboard: "F2", current: None, scope: "save-state" },
-            Shortcut { action: "Load state", description: "Load the active save-state slot.", default_gamepad: "Pause menu > Load State", default_keyboard: "F4", current: None, scope: "save-state" },
-            Shortcut { action: "Toggle fast-forward", description: "Run the PSP at maximum speed.", default_gamepad: "Hold R2 (mapped)", default_keyboard: "Tab", current: None, scope: "core+game" },
-            Shortcut { action: "Take screenshot", description: "Save a PNG to PPSSPP's screenshots folder.", default_gamepad: "—", default_keyboard: "F12", current: None, scope: "core" },
+            Shortcut { action: "Quit emulator", description: "Exit PPSSPP and return to EmulationStation.", default_gamepad: "Select + Start", default_keyboard: "ESC", current: lookup("Pause").or_else(|| lookup("Back")), scope: "core+game" },
+            Shortcut { action: "Open pause menu", description: "Open the in-game menu (save/load state, settings, etc.).", default_gamepad: "Select", default_keyboard: "ESC", current: lookup("Pause"), scope: "core+game" },
+            Shortcut { action: "Save state", description: "Save current state to the active slot.", default_gamepad: "Pause menu > Save State", default_keyboard: "F2", current: lookup("Save State"), scope: "save-state" },
+            Shortcut { action: "Load state", description: "Load the active save-state slot.", default_gamepad: "Pause menu > Load State", default_keyboard: "F4", current: lookup("Load State"), scope: "save-state" },
+            Shortcut { action: "Next save-state slot", description: "Cycle save-state slot forward.", default_gamepad: "—", default_keyboard: "F3", current: lookup("Next Slot"), scope: "save-state" },
+            Shortcut { action: "Toggle fast-forward", description: "Run the PSP at maximum speed.", default_gamepad: "Hold R2 (mapped)", default_keyboard: "Tab", current: lookup("Fast-forward"), scope: "core+game" },
+            Shortcut { action: "Rewind", description: "Rewind (must be enabled in PPSSPP system settings).", default_gamepad: "—", default_keyboard: "(unset)", current: lookup("Rewind"), scope: "core+game" },
+            Shortcut { action: "Toggle FPS counter", description: "Show / hide FPS overlay.", default_gamepad: "—", default_keyboard: "(menu)", current: None, scope: "core" },
+            Shortcut { action: "Take screenshot", description: "Save a PNG to PPSSPP's screenshots folder.", default_gamepad: "—", default_keyboard: "F12", current: lookup("Screenshot"), scope: "core" },
+            Shortcut { action: "PSP D-pad Up", description: "Up on the PSP D-pad.", default_gamepad: "D-pad Up", default_keyboard: "Up arrow", current: lookup("Up"), scope: "core+game" },
+            Shortcut { action: "PSP D-pad Down", description: "Down on the PSP D-pad.", default_gamepad: "D-pad Down", default_keyboard: "Down arrow", current: lookup("Down"), scope: "core+game" },
+            Shortcut { action: "PSP Cross (X)", description: "PSP Cross button (south / confirm).", default_gamepad: "A", default_keyboard: "Z", current: lookup("Cross"), scope: "core+game" },
+            Shortcut { action: "PSP Circle", description: "PSP Circle button (east / back).", default_gamepad: "B", default_keyboard: "X", current: lookup("Circle"), scope: "core+game" },
+            Shortcut { action: "PSP Square", description: "PSP Square button (west).", default_gamepad: "Y", default_keyboard: "A", current: lookup("Square"), scope: "core+game" },
+            Shortcut { action: "PSP Triangle", description: "PSP Triangle button (north).", default_gamepad: "X", default_keyboard: "S", current: lookup("Triangle"), scope: "core+game" },
+            Shortcut { action: "PSP L trigger", description: "Left trigger.", default_gamepad: "L1", default_keyboard: "Q", current: lookup("L"), scope: "core+game" },
+            Shortcut { action: "PSP R trigger", description: "Right trigger.", default_gamepad: "R1", default_keyboard: "W", current: lookup("R"), scope: "core+game" },
         ],
     }
+}
+
+/// Tiny INI parser — returns key=value map of one named section. Quotes
+/// are stripped; comments (`#` or `;`) are ignored.
+fn parse_ini_section(content: &str, section: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let mut in_target = false;
+    let header = format!("[{section}]");
+    for line in content.lines() {
+        let t = line.trim();
+        if t.starts_with('[') && t.ends_with(']') {
+            in_target = t == header;
+            continue;
+        }
+        if !in_target || t.is_empty() || t.starts_with('#') || t.starts_with(';') {
+            continue;
+        }
+        if let Some(eq) = t.find('=') {
+            let key = t[..eq].trim().to_string();
+            let val = t[eq + 1..].trim().trim_matches('"').to_string();
+            out.insert(key, val);
+        }
+    }
+    out
+}
+
+/// PPSSPP stores bindings as `device-keycode[,device-keycode]`. Device 10
+/// = first SDL controller. Translate a handful of common SDL_GameController
+/// codes; pass others through.
+fn translate_ppsspp_binding(raw: &str) -> String {
+    let parts: Vec<String> = raw
+        .split(',')
+        .map(|tok| {
+            let tok = tok.trim();
+            let mut it = tok.splitn(2, '-');
+            let device = it.next().unwrap_or("?");
+            let key = it.next().unwrap_or("?");
+            match (device, key) {
+                ("10", k) => match k {
+                    "189" => "Pad A".into(),
+                    "190" => "Pad B".into(),
+                    "191" => "Pad X".into(),
+                    "192" => "Pad Y".into(),
+                    "193" => "Pad Back/Select".into(),
+                    "195" => "Pad Start".into(),
+                    "196" => "Pad L3".into(),
+                    "197" => "Pad R3".into(),
+                    "198" => "Pad L1".into(),
+                    "199" => "Pad R1".into(),
+                    "200" => "Pad D-pad Up".into(),
+                    "201" => "Pad D-pad Down".into(),
+                    "202" => "Pad D-pad Left".into(),
+                    "203" => "Pad D-pad Right".into(),
+                    "204" => "Pad L2".into(),
+                    "205" => "Pad R2".into(),
+                    other => format!("Pad btn {other}"),
+                },
+                ("1", k) => format!("Key {k}"),
+                _ => tok.to_string(),
+            }
+        })
+        .collect();
+    parts.join(" + ")
 }
 
 fn drastic_entry() -> EmulatorEntry {

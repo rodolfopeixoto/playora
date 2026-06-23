@@ -40,6 +40,10 @@ struct Current {
     pid: Option<u32>,
     save_hash_on_start: Option<String>,
     save_path: Option<String>,
+    #[serde(default)]
+    max_cpu_percent: Option<f32>,
+    #[serde(default)]
+    max_memory_mb: Option<u64>,
 }
 
 impl SessionTracker {
@@ -68,6 +72,13 @@ impl SessionTracker {
                 let _ = std::fs::remove_file(PERSIST_PATH);
                 self.current = None;
                 self.start(cfg, d);
+            }
+            (Some(_), Some(_)) => {
+                // Same session still running — sample CPU/mem peak.
+                if let Some(cur) = self.current.as_mut() {
+                    sample_into(cur);
+                    persist(cur);
+                }
             }
             (Some(cur), None) => {
                 let kind = classify_finish(cur);
@@ -101,6 +112,8 @@ impl SessionTracker {
             pid: d.pid,
             save_hash_on_start,
             save_path: save_path.as_ref().map(|p| p.display().to_string()),
+            max_cpu_percent: None,
+            max_memory_mb: None,
         };
         let ev = Event {
             event_id: EventId::new(),
@@ -130,6 +143,21 @@ enum FinishKind {
     Normal,
     Crash,
     Orphan,
+}
+
+/// Sample the emulator pid's CPU and memory via sysinfo; keep the peak.
+fn sample_into(cur: &mut Current) {
+    let Some(pid_u32) = cur.pid else { return };
+    use sysinfo::{Pid, System};
+    let mut sys = System::new();
+    sys.refresh_all();
+    let pid = Pid::from(pid_u32 as usize);
+    if let Some(proc_) = sys.process(pid) {
+        let cpu = proc_.cpu_usage();
+        let mem_mb = proc_.memory() / 1024 / 1024;
+        cur.max_cpu_percent = Some(cur.max_cpu_percent.map_or(cpu, |p| p.max(cpu)));
+        cur.max_memory_mb = Some(cur.max_memory_mb.map_or(mem_mb, |p| p.max(mem_mb)));
+    }
 }
 
 fn classify_finish(cur: &Current) -> FinishKind {
@@ -171,8 +199,8 @@ fn emit_finish(cfg: &AgentConfig, cur: &Current, kind: FinishKind) {
                 duration_seconds: duration,
                 exit_code: None,
                 save_changed,
-                max_cpu_percent: None,
-                max_memory_mb: None,
+                max_cpu_percent: cur.max_cpu_percent,
+                max_memory_mb: cur.max_memory_mb,
             }),
         };
         let _ = crate::db::enqueue(&conn, &fin);
