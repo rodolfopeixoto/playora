@@ -45,10 +45,13 @@ if [ -f "$RCLONE_CACHE" ]; then
 fi
 
 # Single-mode foreground port runner — matches the PortMaster / ThemeMaster
-# convention. Runs synchronously on /dev/tty1 so ES always sees a normal
-# child-script lifecycle, then restarts ES on exit. Never tries to detach.
-#
-# Args: NAME CMD [TIMEOUT_SECONDS]
+# convention. Prefer the VCS-tracked standalone script; otherwise fall back
+# to the embedded copy so the installer stays self-contained.
+if [ -f "$ROOT/scripts/port-runner.sh" ]; then
+    cp "$ROOT/scripts/port-runner.sh" "$PLAYORA_DIR/port-runner.sh"
+    chmod 0755 "$PLAYORA_DIR/port-runner.sh"
+    echo "[install] port-runner.sh from scripts/"
+else
 cat > "$PLAYORA_DIR/port-runner.sh" <<'RUNNER'
 #!/bin/sh
 # Single source of truth for every Playora port.
@@ -240,6 +243,7 @@ printf '\b\b\bnow.\033[0m\n'
 exit "$END_RC"
 RUNNER
 chmod 0755 "$PLAYORA_DIR/port-runner.sh"
+fi  # end embedded-runner fallback
 
 # Splash PNG generator: replaces the generic purple ES launch image with
 # an informative card so the user sees what's happening during launch.
@@ -288,10 +292,18 @@ EOF
 # tty mode → user sees colored output on the R36S screen
 # bg  mode → fire-and-forget background job, dashboard tracks
 write_port "Doctor"          "doctor"                            30    tty
+write_port "Doctor Deep"     "doctor --deep"                     90    tty
+write_port "Hotkeys"         "hotkeys"                           120   tty
 write_port "Fix Exit-Game"   "fix-exit-game --apply"             60    tty
 write_port "Check Exit-Game" "fix-exit-game"                     30    tty
+write_port "Restore Exit-Game" "fix-exit-game --restore"         30    tty
 write_port "Hardware"        "hardware snapshot --pretty --save" 30    tty
 write_port "Scan ROMs"       "scan"                              300   tty
+write_port "Audit ROMs"      "audit-roms"                        300   tty
+write_port "Clean ROMs"      "clean-roms --apply"                180   tty
+write_port "Check Clean"     "clean-roms"                        60    tty
+write_port "Repair Layout"   "repair-rom-layout --apply"         600   tty
+write_port "Check Layout"    "repair-rom-layout"                 60    tty
 write_port "Extract ROMs"    "extract-roms"                      600   tty
 write_port "Compress ROMs"   "compress-roms"                     1800  tty
 write_port "Restore Backup"  "restore-tar"                       none  tty
@@ -415,11 +427,19 @@ EOF
 desc_for() {
     case "$1" in
         "Doctor") echo "Health check: storage, server, tools, RetroArch, autosync — full report on screen.";;
-        "Fix Exit-Game") echo "Patch retroarch.cfg to fix the Select+Start exit-freeze on R36S: video_threaded, audio_driver=alsathread, pause_nonactive, quit combo. Backs up first. Reboot to apply.";;
+        "Doctor Deep") echo "Deep health check: panel/TTY/dmesg/macOS junk/CUE+M3U/BIOS/gamelists/RA overrides/RA32. Saves JSON report and posts events to the dashboard.";;
+        "Hotkeys") echo "Show every emulator's shortcuts in English: how to exit, how to open menu, save state, load state, fast-forward, rewind, swap disc, screenshot, FPS, mute. Reads each emulator's current cfg.";;
+        "Fix Exit-Game") echo "Patch retroarch.cfg to fix the Select+Start exit-freeze on R36S: video_threaded, audio_driver=alsathread, pause_nonactive, quit combo. Timestamped backup. Reboot to apply.";;
         "Check Exit-Game") echo "Show which retroarch.cfg settings would be changed by Fix Exit-Game. Dry run, no writes.";;
+        "Restore Exit-Game") echo "Roll back the most recent Fix Exit-Game patch using the timestamped backup.";;
         "Hardware") echo "Show CPU/RAM/kernel/panel/disk/WiFi on screen and sync the snapshot to the dashboard.";;
         "Quick Sync") echo "Background: diagnostic + hardware snapshot + sync. Quick way to push state to the hub.";;
         "Scan ROMs") echo "Index every ROM in /roms. Incremental: re-runs skip files that haven't changed.";;
+        "Audit ROMs") echo "Inventory + integrity report: duplicates, zero-byte, broken CUE/M3U, missing BIOS, macOS junk, invalid gamelists. JSON saved + event sent.";;
+        "Clean ROMs") echo "Remove certified-safe junk: .DS_Store, ._*, __MACOSX/, thumbs.db. Fix CRLF + chmod +x on ports/*.sh. Never touches ROMs/saves/BIOS.";;
+        "Check Clean") echo "Dry-run of Clean ROMs — lists junk that would be removed.";;
+        "Repair Layout") echo "Move ROMs from _inbox or wrong system folder to the correct one by file extension. Never overwrites; renames .dup-N on collision.";;
+        "Check Layout") echo "Dry-run of Repair Layout — lists planned moves.";;
         "Extract ROMs") echo "Extract every archive in /roms/_inbox and route ROMs into /roms/<system>/ by file extension.";;
         "Compress ROMs") echo "Convert PSX/Saturn/Dreamcast/PSP/Wii images to CHD/CSO/RVZ. Smaller + RetroArch-native.";;
         "Restore Backup") echo "Extract /roms/playora_restore.tar idempotently — skips files already present.";;
