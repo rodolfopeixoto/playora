@@ -151,6 +151,18 @@ pub async fn events_batch(
             EventPayload::Activity(_) => "activity",
             EventPayload::RestoreProgress(_) => "restore_progress",
             EventPayload::GameMetadata(_) => "game_metadata",
+            EventPayload::SystemIssueDetected(_) => "system_issue_detected",
+            EventPayload::DoctorReport(_) => "doctor_report",
+            EventPayload::RomAuditResult(_) => "rom_audit_result",
+            EventPayload::ScriptStarted(_) => "script_started",
+            EventPayload::ScriptFinished(_) => "script_finished",
+            EventPayload::GameSessionCrashed(_) => "game_session_crashed",
+            EventPayload::GameSessionOrphaned(_) => "game_session_orphaned",
+            EventPayload::SaveChanged(_) => "save_changed",
+            EventPayload::BlackScreenRecovered(_) => "black_screen_recovered",
+            EventPayload::EmulationStationRestarted(_) => "emulation_station_restarted",
+            EventPayload::NetplayRoomCreated(_) => "netplay_room_created",
+            EventPayload::NetplayRoomJoined(_) => "netplay_room_joined",
         };
         let r = conn.execute(
             "INSERT INTO events(event_id,device_id,event_type,payload_json,received_at) VALUES (?1,?2,?3,?4,?5)",
@@ -430,6 +442,82 @@ pub async fn ranking_playtime(AxState(state): AxState<State>) -> Json<Vec<Value>
         "game": r.get::<_,String>(0)?, "system": r.get::<_,String>(1)?, "duration_seconds": r.get::<_,i64>(2)?
     }))).unwrap();
     Json(rows.flatten().collect())
+}
+
+/// Issues feed for a device — last 200 system_issue_detected events, newest first.
+pub async fn device_issues(
+    AxState(state): AxState<State>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Vec<Value>> {
+    let conn = state.lock().await;
+    let mut stmt = match conn.prepare(
+        "SELECT event_id, payload_json, received_at FROM events
+         WHERE device_id=?1 AND event_type='system_issue_detected'
+         ORDER BY id DESC LIMIT 200",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Json(vec![]),
+    };
+    let rows = stmt
+        .query_map([&id], |r| {
+            let payload: String = r.get(1)?;
+            let parsed: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
+            Ok(serde_json::json!({
+                "event_id":   r.get::<_,String>(0)?,
+                "received_at":r.get::<_,String>(2)?,
+                "payload":    parsed,
+            }))
+        })
+        .ok();
+    let mut out = Vec::new();
+    if let Some(rs) = rows {
+        for r in rs.flatten() {
+            out.push(r);
+        }
+    }
+    Json(out)
+}
+
+/// Latest rom audit result for a device.
+pub async fn device_rom_audit(
+    AxState(state): AxState<State>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let conn = state.lock().await;
+    let v: Option<String> = conn
+        .query_row(
+            "SELECT payload_json FROM events
+             WHERE device_id=?1 AND event_type='rom_audit_result'
+             ORDER BY id DESC LIMIT 1",
+            [&id],
+            |r| r.get(0),
+        )
+        .ok();
+    match v {
+        Some(s) => Json(serde_json::from_str(&s).unwrap_or(Value::Null)),
+        None => Json(Value::Null),
+    }
+}
+
+/// Latest doctor report for a device.
+pub async fn device_doctor_report(
+    AxState(state): AxState<State>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Json<Value> {
+    let conn = state.lock().await;
+    let v: Option<String> = conn
+        .query_row(
+            "SELECT payload_json FROM events
+             WHERE device_id=?1 AND event_type='doctor_report'
+             ORDER BY id DESC LIMIT 1",
+            [&id],
+            |r| r.get(0),
+        )
+        .ok();
+    match v {
+        Some(s) => Json(serde_json::from_str(&s).unwrap_or(Value::Null)),
+        None => Json(Value::Null),
+    }
 }
 
 pub async fn activities_recent(AxState(state): AxState<State>) -> Json<Vec<Value>> {

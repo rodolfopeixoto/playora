@@ -1382,3 +1382,279 @@ fn relative_time(ts: &str) -> String {
         ts.to_string()
     }
 }
+
+// ---------------------------------------------------------------
+// Sprint 3H: Issues + ROM Audit + Doctor Report pages
+// ---------------------------------------------------------------
+
+const TAB_STYLE: &str = r#"
+<style>
+body{background:#0a0a0a;color:#d8d8d8;font-family:system-ui,sans-serif;margin:0;padding:24px}
+a{color:#9ad;text-decoration:none}a:hover{text-decoration:underline}
+h1{font-size:22px;margin:0 0 12px} h2{font-size:16px;margin:24px 0 8px;color:#9ad}
+.tabs{display:flex;gap:8px;margin:8px 0 16px}
+.tabs a{padding:6px 12px;background:#181818;border:1px solid #2a2a2a;border-radius:4px;color:#d8d8d8}
+.tabs a.active{background:#2a4060;border-color:#3a5070}
+table{border-collapse:collapse;width:100%;margin-top:8px}
+th,td{padding:6px 10px;text-align:left;border-bottom:1px solid #1f1f1f;font-size:13px;vertical-align:top}
+th{color:#9ad;font-weight:600}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.badge.critical{background:#4a1010;color:#ff7575}
+.badge.warning{background:#4a3010;color:#d4a648}
+.badge.info{background:#102a4a;color:#9ad}
+.muted{color:#666;font-size:11px}
+.card{background:#101010;border:1px solid #1f1f1f;border-radius:6px;padding:12px;margin:8px 0}
+code{background:#1a1a1a;padding:2px 5px;border-radius:3px;font-size:11px}
+</style>
+"#;
+
+fn nav_tabs(device_id: &str, active: &str) -> String {
+    let tabs = [
+        (
+            "overview",
+            "Overview",
+            format!("/dashboard/device/{device_id}"),
+        ),
+        (
+            "issues",
+            "Issues",
+            format!("/dashboard/device/{device_id}/issues"),
+        ),
+        (
+            "rom-audit",
+            "ROM Audit",
+            format!("/dashboard/device/{device_id}/rom-audit"),
+        ),
+        (
+            "doctor",
+            "Doctor Report",
+            format!("/dashboard/device/{device_id}/doctor"),
+        ),
+        (
+            "games",
+            "Games",
+            format!("/dashboard/device/{device_id}/games"),
+        ),
+    ];
+    let mut out = String::from("<div class=\"tabs\">");
+    for (id, label, href) in tabs {
+        let cls = if id == active { "active" } else { "" };
+        out.push_str(&format!("<a class=\"{cls}\" href=\"{href}\">{label}</a>"));
+    }
+    out.push_str("</div>");
+    out
+}
+
+pub async fn device_issues_page(
+    AxState(state): AxState<State>,
+    AxPath(id): AxPath<String>,
+) -> Html<String> {
+    let conn = state.lock().await;
+    let mut rows_html = String::new();
+    let mut by_sev = (0u32, 0u32, 0u32); // critical, warning, info
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT payload_json, received_at FROM events
+         WHERE device_id=?1 AND event_type='system_issue_detected'
+         ORDER BY id DESC LIMIT 200",
+    ) {
+        let rows = stmt
+            .query_map([&id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .ok();
+        if let Some(rs) = rows {
+            for (payload, recv) in rs.flatten() {
+                let p: serde_json::Value = serde_json::from_str(&payload).unwrap_or_default();
+                let data = p.get("data").unwrap_or(&p);
+                let sev = data
+                    .get("severity")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("info");
+                let title = data.get("title").and_then(|v| v.as_str()).unwrap_or("?");
+                let code = data.get("code").and_then(|v| v.as_str()).unwrap_or("?");
+                let fix = data
+                    .get("suggested_fix")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let evidence = data.get("evidence").and_then(|v| v.as_str()).unwrap_or("");
+                let auto = data
+                    .get("auto_fixable")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                match sev {
+                    "critical" => by_sev.0 += 1,
+                    "warning" => by_sev.1 += 1,
+                    _ => by_sev.2 += 1,
+                }
+                rows_html.push_str(&format!(
+                    "<tr><td><span class=\"badge {}\">{}</span></td>\
+                     <td>{}<br/><code>{}</code></td>\
+                     <td>{}</td>\
+                     <td>{}{}</td>\
+                     <td class=\"muted\">{}</td></tr>",
+                    esc(sev),
+                    esc(sev),
+                    esc(title),
+                    esc(code),
+                    if evidence.is_empty() {
+                        String::new()
+                    } else {
+                        format!("<code>{}</code>", esc(evidence))
+                    },
+                    esc(fix),
+                    if auto {
+                        " <span class=\"badge info\">auto-fixable</span>"
+                    } else {
+                        ""
+                    },
+                    esc(&relative_time(&recv)),
+                ));
+            }
+        }
+    }
+    let tabs = nav_tabs(&id, "issues");
+    let html = format!(
+        "<!doctype html><html><head><title>Issues — {id}</title>{TAB_STYLE}</head><body>\
+         <h1>Device {id} — Issues</h1>{tabs}\
+         <div class=\"card\">\
+           <span class=\"badge critical\">critical: {}</span> \
+           <span class=\"badge warning\">warning: {}</span> \
+           <span class=\"badge info\">info: {}</span>\
+         </div>\
+         <table><thead><tr><th>Severity</th><th>Title / Code</th><th>Evidence</th><th>Suggested fix</th><th>When</th></tr></thead>\
+         <tbody>{rows_html}</tbody></table></body></html>",
+        by_sev.0, by_sev.1, by_sev.2,
+    );
+    Html(html)
+}
+
+pub async fn device_rom_audit_page(
+    AxState(state): AxState<State>,
+    AxPath(id): AxPath<String>,
+) -> Html<String> {
+    let conn = state.lock().await;
+    let latest: Option<String> = conn
+        .query_row(
+            "SELECT payload_json FROM events
+             WHERE device_id=?1 AND event_type='rom_audit_result'
+             ORDER BY id DESC LIMIT 1",
+            [&id],
+            |r| r.get(0),
+        )
+        .ok();
+    let tabs = nav_tabs(&id, "rom-audit");
+    let body = match latest {
+        None => "<p class=\"muted\">No ROM audit reported yet. Run <code>playora-agent audit-roms</code> on the device.</p>".to_string(),
+        Some(j) => {
+            let v: serde_json::Value = serde_json::from_str(&j).unwrap_or_default();
+            let d = v.get("data").unwrap_or(&v);
+            let g = |k: &str| d.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+            let bios = d
+                .get("bios_missing")
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(esc)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            let path = d
+                .get("report_path")
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            format!(
+                "<table><tbody>\
+                 <tr><td>ROMs total</td><td>{}</td></tr>\
+                 <tr><td>Zero-byte</td><td>{}</td></tr>\
+                 <tr><td>Duplicates</td><td>{}</td></tr>\
+                 <tr><td>Broken CUE</td><td>{}</td></tr>\
+                 <tr><td>Broken M3U</td><td>{}</td></tr>\
+                 <tr><td>Invalid gamelists</td><td>{}</td></tr>\
+                 <tr><td>macOS junk</td><td>{}</td></tr>\
+                 <tr><td>Unknown extensions</td><td>{}</td></tr>\
+                 <tr><td>Missing BIOS</td><td>{}</td></tr>\
+                 <tr><td>Report path (device)</td><td><code>{}</code></td></tr>\
+                 </tbody></table>",
+                g("roms_total"),
+                g("zero_byte"),
+                g("duplicates"),
+                g("broken_cue"),
+                g("broken_m3u"),
+                g("gamelist_invalid"),
+                g("macos_junk"),
+                g("unknown_extensions"),
+                if bios.is_empty() { "—".into() } else { bios },
+                esc(path),
+            )
+        }
+    };
+    Html(format!(
+        "<!doctype html><html><head><title>ROM Audit — {id}</title>{TAB_STYLE}</head><body>\
+         <h1>Device {id} — ROM Audit</h1>{tabs}{body}</body></html>"
+    ))
+}
+
+pub async fn device_doctor_page(
+    AxState(state): AxState<State>,
+    AxPath(id): AxPath<String>,
+) -> Html<String> {
+    let conn = state.lock().await;
+    let latest: Option<String> = conn
+        .query_row(
+            "SELECT payload_json FROM events
+             WHERE device_id=?1 AND event_type='doctor_report'
+             ORDER BY id DESC LIMIT 1",
+            [&id],
+            |r| r.get(0),
+        )
+        .ok();
+    let tabs = nav_tabs(&id, "doctor");
+    let body = match latest {
+        None => "<p class=\"muted\">No doctor report yet. Run <code>playora-agent doctor --deep</code> on the device.</p>".to_string(),
+        Some(j) => {
+            let v: serde_json::Value = serde_json::from_str(&j).unwrap_or_default();
+            let d = v.get("data").unwrap_or(&v);
+            let score = d.get("score").and_then(|x| x.as_str()).unwrap_or("?");
+            let cls = match score {
+                "fail" => "critical",
+                "warn" => "warning",
+                _ => "info",
+            };
+            let g = |k: &str| d.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+            let auto = d
+                .get("auto_fixes")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str()).map(|s| format!("<li>{}</li>", esc(s))).collect::<String>())
+                .unwrap_or_default();
+            let manual = d
+                .get("manual_fixes")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str()).map(|s| format!("<li>{}</li>", esc(s))).collect::<String>())
+                .unwrap_or_default();
+            let report_path = d
+                .get("report_path")
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            format!(
+                "<div class=\"card\"><span class=\"badge {cls}\">score: {score}</span> \
+                 ok: {} · warn: {} · fail: {} · total: {}</div>\
+                 <h2>Auto-fixable</h2><ul>{}</ul>\
+                 <h2>Manual fixes</h2><ul>{}</ul>\
+                 <p class=\"muted\">Report on device: <code>{}</code></p>",
+                g("checks_ok"),
+                g("checks_warn"),
+                g("checks_fail"),
+                g("checks_total"),
+                if auto.is_empty() { "<li class=\"muted\">none</li>".into() } else { auto },
+                if manual.is_empty() { "<li class=\"muted\">none</li>".into() } else { manual },
+                esc(report_path),
+            )
+        }
+    };
+    Html(format!(
+        "<!doctype html><html><head><title>Doctor — {id}</title>{TAB_STYLE}</head><body>\
+         <h1>Device {id} — Doctor Report</h1>{tabs}{body}</body></html>"
+    ))
+}

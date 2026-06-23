@@ -114,6 +114,15 @@ async fn main() -> Result<()> {
             "/api/v1/analytics/overview",
             get(routes::analytics_overview),
         )
+        .route("/api/v1/devices/:id/issues", get(routes::device_issues))
+        .route(
+            "/api/v1/devices/:id/rom-audit",
+            get(routes::device_rom_audit),
+        )
+        .route(
+            "/api/v1/devices/:id/doctor-report",
+            get(routes::device_doctor_report),
+        )
         .route("/api/v1/activities/recent", get(routes::activities_recent))
         .route("/api/v1/activities/:id", get(routes::activity_get))
         .route(
@@ -191,6 +200,18 @@ async fn main() -> Result<()> {
             get(dashboard::activity_detail_page),
         )
         .route("/dashboard/device/:id", get(dashboard::device_page))
+        .route(
+            "/dashboard/device/:id/issues",
+            get(dashboard::device_issues_page),
+        )
+        .route(
+            "/dashboard/device/:id/rom-audit",
+            get(dashboard::device_rom_audit_page),
+        )
+        .route(
+            "/dashboard/device/:id/doctor",
+            get(dashboard::device_doctor_page),
+        )
         .with_state(state)
         .layer(TraceLayer::new_for_http());
 
