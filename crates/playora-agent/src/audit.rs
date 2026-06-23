@@ -89,7 +89,7 @@ const BIOS_REQUIRED: &[(&str, &[&str])] = &[
     ("neogeo", &["neogeo.zip"]),
 ];
 
-pub fn cmd_audit(cfg: AgentConfig) -> Result<()> {
+pub fn cmd_audit(cfg: AgentConfig, hash_mode: bool) -> Result<()> {
     use crate::ttyui::{self, Status};
     ttyui::header("Audit ROMs");
 
@@ -186,13 +186,25 @@ pub fn cmd_audit(cfg: AgentConfig) -> Result<()> {
                         .or_default() += 1;
                 }
             }
-            // Duplicate key by lowercased filename + size
-            let key = format!(
-                "{}|{size}",
-                p.file_name()
-                    .map(|n| n.to_string_lossy().to_lowercase())
-                    .unwrap_or_default()
-            );
+            // Duplicate key: SHA-256 prefix when --hash, otherwise name+size.
+            let key = if hash_mode {
+                match hash_with_cache(&p, size) {
+                    Some(h) => format!("sha256:{h}"),
+                    None => format!(
+                        "{}|{size}",
+                        p.file_name()
+                            .map(|n| n.to_string_lossy().to_lowercase())
+                            .unwrap_or_default()
+                    ),
+                }
+            } else {
+                format!(
+                    "{}|{size}",
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().to_lowercase())
+                        .unwrap_or_default()
+                )
+            };
             by_key.entry(key).or_default().push((p, size));
             count += 1;
             bytes += size;
@@ -487,6 +499,48 @@ fn scan_missing_bios(root: &Path) -> Vec<String> {
         }
     }
     missing
+}
+
+/// SHA-256 a file, caching by (path, size) in the agent SQLite `games`
+/// table. Reuses the scanner's `rom_hash` column when size matches; falls
+/// back to a quick partial hash (first + last 256 KiB) on huge files so a
+/// full audit doesn't read tens of GB.
+fn hash_with_cache(path: &Path, size: u64) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Seek, SeekFrom};
+
+    let rom_path = path.display().to_string();
+    if let Ok(conn) = crate::db::open(&crate::cfg::db_path()) {
+        let cached: Option<(String, i64)> = conn
+            .query_row(
+                "SELECT COALESCE(rom_hash,''), COALESCE(file_size,0) FROM games WHERE rom_path=?1",
+                rusqlite::params![rom_path],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok();
+        if let Some((h, sz)) = cached {
+            if !h.is_empty() && sz as u64 == size {
+                return Some(h);
+            }
+        }
+    }
+
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 256 * 1024];
+    if size <= 4 * 1024 * 1024 {
+        let mut total = Vec::with_capacity(size as usize);
+        f.read_to_end(&mut total).ok()?;
+        h.update(&total);
+    } else {
+        let n = f.read(&mut buf).ok()?;
+        h.update(&buf[..n]);
+        f.seek(SeekFrom::End(-(buf.len() as i64))).ok()?;
+        let n = f.read(&mut buf).ok()?;
+        h.update(&buf[..n]);
+        h.update(size.to_le_bytes());
+    }
+    Some(hex::encode(h.finalize()))
 }
 
 fn atomic_write(p: &Path, data: &[u8]) -> std::io::Result<()> {

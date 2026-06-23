@@ -236,11 +236,19 @@ enum Cmd {
         json: bool,
     },
     /// Audit /roms — inventory, duplicates, broken CUE/M3U, missing BIOS, junk
-    AuditRoms,
+    AuditRoms {
+        /// Use SHA-256 (with on-disk cache) for precise duplicate detection.
+        /// Slower on first run; near-instant on re-runs.
+        #[arg(long)]
+        hash: bool,
+    },
     /// Remove certified-safe junk (.DS_Store, ._*, __MACOSX, CRLF in scripts)
     CleanRoms {
         #[arg(long)]
         apply: bool,
+        /// Move junk to /roms/.playora/quarantine/<stamp>/ instead of deleting.
+        #[arg(long)]
+        quarantine: bool,
     },
     /// Move ROMs from _inbox or wrong system folder to the correct one
     RepairRomLayout {
@@ -708,8 +716,10 @@ fn main() -> Result<()> {
         Cmd::Hotkeys { system, json } => {
             hotkeys::cmd_hotkeys(load_cfg(cli.config.as_deref())?, system, json)
         }
-        Cmd::AuditRoms => audit::cmd_audit(load_cfg(cli.config.as_deref())?),
-        Cmd::CleanRoms { apply } => clean::cmd_clean(load_cfg(cli.config.as_deref())?, apply),
+        Cmd::AuditRoms { hash } => audit::cmd_audit(load_cfg(cli.config.as_deref())?, hash),
+        Cmd::CleanRoms { apply, quarantine } => {
+            clean::cmd_clean(load_cfg(cli.config.as_deref())?, apply, quarantine)
+        }
         Cmd::RepairRomLayout { apply } => {
             repair::cmd_repair(load_cfg(cli.config.as_deref())?, apply)
         }

@@ -9,10 +9,12 @@ use chrono::Utc;
 use playora_common::*;
 use std::path::{Path, PathBuf};
 
-pub fn cmd_clean(cfg: AgentConfig, apply: bool) -> Result<()> {
+pub fn cmd_clean(cfg: AgentConfig, apply: bool, quarantine: bool) -> Result<()> {
     use crate::ttyui::{self, Status};
-    ttyui::header(if apply {
-        "Clean ROMs — Apply"
+    ttyui::header(if apply && quarantine {
+        "Clean ROMs — Quarantine"
+    } else if apply {
+        "Clean ROMs — Apply (delete)"
     } else {
         "Clean ROMs — Dry Run"
     });
@@ -125,16 +127,32 @@ pub fn cmd_clean(cfg: AgentConfig, apply: bool) -> Result<()> {
     let log = log_dir.join(format!("clean-{stamp}.log"));
     let mut body = String::from("# clean-roms log\n");
 
+    let quarantine_root = Path::new("/roms/.playora/quarantine").join(&stamp);
+    if quarantine {
+        let _ = std::fs::create_dir_all(&quarantine_root);
+    }
     let mut removed = 0u32;
     for p in &to_remove {
-        let r = if p.is_dir() {
+        let r = if quarantine {
+            // Move under quarantine_root preserving path layout under /roms.
+            let rel = p.strip_prefix(&root).unwrap_or(p);
+            let dest = quarantine_root.join(rel);
+            if let Some(parent) = dest.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::rename(p, &dest)
+        } else if p.is_dir() {
             std::fs::remove_dir_all(p)
         } else {
             std::fs::remove_file(p)
         };
         if r.is_ok() {
             removed += 1;
-            body.push_str(&format!("removed: {}\n", p.display()));
+            body.push_str(&format!(
+                "{}: {}\n",
+                if quarantine { "quarantined" } else { "removed" },
+                p.display()
+            ));
         } else {
             body.push_str(&format!("kept (err): {}\n", p.display()));
         }
