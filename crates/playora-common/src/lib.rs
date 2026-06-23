@@ -333,6 +333,149 @@ pub struct Activity {
     pub stdout_tail: Option<String>,
 }
 
+// ============================================================
+// Sprint-1 additive event payloads — DO NOT renumber, only append.
+// All new variants are optional; old agents/servers ignore unknown.
+// ============================================================
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueSeverity {
+    Critical,
+    Warning,
+    Info,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemIssueDetected {
+    pub code: String,
+    pub severity: IssueSeverity,
+    pub title: String,
+    pub evidence: Option<String>,
+    pub suggested_fix: Option<String>,
+    pub auto_fixable: bool,
+    pub detected_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DoctorScore {
+    Ok,
+    Warn,
+    Fail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DoctorReport {
+    pub report_id: String,
+    pub score: DoctorScore,
+    pub checks_total: u32,
+    pub checks_ok: u32,
+    pub checks_warn: u32,
+    pub checks_fail: u32,
+    pub issues: Vec<SystemIssueDetected>,
+    pub auto_fixes: Vec<String>,
+    pub manual_fixes: Vec<String>,
+    pub report_path: Option<String>,
+    pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RomAuditResult {
+    pub audit_id: String,
+    pub roms_total: u32,
+    pub roms_orphan: u32,
+    pub broken_cue: u32,
+    pub broken_m3u: u32,
+    pub zero_byte: u32,
+    pub duplicates: u32,
+    pub macos_junk: u32,
+    pub gamelist_invalid: u32,
+    pub bios_missing: Vec<String>,
+    pub unknown_extensions: u32,
+    pub report_path: Option<String>,
+    pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptStarted {
+    pub script: String,
+    pub pid: Option<u32>,
+    pub args: Option<String>,
+    pub started_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptFinished {
+    pub script: String,
+    pub exit_code: i32,
+    pub duration_seconds: u64,
+    pub stdout_tail: Option<String>,
+    pub ended_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameSessionCrashed {
+    pub session_id: SessionId,
+    pub exit_code: Option<i32>,
+    pub signal: Option<String>,
+    pub stderr_tail: Option<String>,
+    pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameSessionOrphaned {
+    pub session_id: SessionId,
+    pub started_at: DateTime<Utc>,
+    pub reconciled_at: DateTime<Utc>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveChanged {
+    pub system: String,
+    pub save_path: String,
+    pub old_hash: Option<String>,
+    pub new_hash: String,
+    pub file_size: u64,
+    pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlackScreenRecovered {
+    pub triggered_by: String,
+    pub duration_seconds: u64,
+    pub es_restarted: bool,
+    pub killed_processes: Vec<String>,
+    pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmulationStationRestarted {
+    pub reason: String,
+    pub method: String, // systemd|exec|fallback
+    pub captured_at: DateTime<Utc>,
+}
+
+// Sprint-4 netplay (experimental; opt-in only)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetplayRoomCreated {
+    pub room_id: String,
+    pub host_code: String,
+    pub system: String,
+    pub core: String,
+    pub content_hash: Option<String>,
+    pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetplayRoomJoined {
+    pub room_id: String,
+    pub host_code: String,
+    pub latency_ms: Option<u32>,
+    pub captured_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameMetadataEvent {
     pub system: String,
@@ -373,6 +516,19 @@ pub enum EventPayload {
     Activity(Activity),
     RestoreProgress(RestoreProgress),
     GameMetadata(GameMetadataEvent),
+    // Sprint-1 additive (append only):
+    SystemIssueDetected(SystemIssueDetected),
+    DoctorReport(DoctorReport),
+    RomAuditResult(RomAuditResult),
+    ScriptStarted(ScriptStarted),
+    ScriptFinished(ScriptFinished),
+    GameSessionCrashed(GameSessionCrashed),
+    GameSessionOrphaned(GameSessionOrphaned),
+    SaveChanged(SaveChanged),
+    BlackScreenRecovered(BlackScreenRecovered),
+    EmulationStationRestarted(EmulationStationRestarted),
+    NetplayRoomCreated(NetplayRoomCreated),
+    NetplayRoomJoined(NetplayRoomJoined),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
