@@ -51,9 +51,24 @@ fi
 # Args: NAME CMD [TIMEOUT_SECONDS]
 cat > "$PLAYORA_DIR/port-runner.sh" <<'RUNNER'
 #!/bin/sh
+# Single source of truth for every Playora port.
+# Hard guarantees:
+#   1. Console NEVER stays black: ES is restarted no matter what fails.
+#   2. No interactive step blocks indefinitely (timeouts everywhere).
+#   3. A safety-net watchdog forces ES restart after MAX_TOTAL seconds
+#      regardless of what the script is doing.
+#   4. Activity events still flush so the dashboard sees the result.
+
 NAME="$1"; shift
 CMD="$1"; shift
 TIMEOUT="${1:-30}"
+
+# Total wall-clock budget: command runtime + interactive review.
+# Even Restore Backup ("none") gets capped at 2 hours by the watchdog.
+case "$TIMEOUT" in
+    none) MAX_TOTAL=7200 ;;
+    *)    MAX_TOTAL=$(( TIMEOUT + 300 )) ;;
+esac
 
 SAFE="$(echo "$NAME" | tr ' /' '__')"
 LOG="/roms/.playora/logs/${SAFE}_$(date +%Y%m%d_%H%M%S).log"
@@ -62,14 +77,51 @@ AGENT="/roms/.playora/playora-agent --config /roms/.playora/agent.toml"
 ESUDO="sudo"
 [ "$(id -u)" = "0" ] && ESUDO=""
 
+# Detect a usable framebuffer console. Prefer /dev/tty1, fall back to tty0.
+TTY=/dev/tty1
+[ -c "$TTY" ] || TTY=/dev/tty0
 export TERM=linux
-$ESUDO chmod 666 /dev/tty1 /dev/uinput 2>/dev/null || true
-printf '\033c' > /dev/tty1
-exec </dev/tty1 >/dev/tty1 2>&1
+$ESUDO chmod 666 "$TTY" /dev/uinput 2>/dev/null || true
+printf '\033c' > "$TTY" 2>/dev/null
+exec <"$TTY" >"$TTY" 2>&1
 
-# Find gptokeyb in the locations dArkOSRE / PortMaster install it. Without
-# this, `dialog` waits forever for keyboard input that the gamepad never
-# produces. Match PortMaster's pattern exactly.
+# Detect ES service name dynamically (different forks use different names).
+ES_SERVICE=""
+for s in emulationstation emustation oga_es; do
+    systemctl list-unit-files "${s}.service" 2>/dev/null | grep -q "$s" && ES_SERVICE="$s" && break
+done
+
+restart_es() {
+    stop_gptokeyb
+    clear > "$TTY" 2>/dev/null
+    if [ -n "$ES_SERVICE" ]; then
+        $ESUDO systemctl restart "$ES_SERVICE" 2>/dev/null
+    fi
+    # Always also try the historical names — defence in depth.
+    $ESUDO systemctl restart emulationstation 2>/dev/null
+    $ESUDO systemctl restart emustation 2>/dev/null
+    # Last resort: spawn ES directly if no service manages it.
+    if ! pgrep -x emulationstation >/dev/null 2>&1; then
+        command -v emulationstation >/dev/null && \
+            ($ESUDO nohup emulationstation </dev/null >/dev/null 2>&1 &)
+    fi
+}
+
+# WATCHDOG: nothing on this device should keep the screen captive for
+# longer than MAX_TOTAL seconds. If we ever do, kill the script's process
+# group + restart ES so the user is back in the menu.
+SCRIPT_PID=$$
+(
+    sleep "$MAX_TOTAL"
+    echo "[$(date +%H:%M:%S)] WATCHDOG: ${MAX_TOTAL}s elapsed, forcing ES restart." >> "$LOG"
+    $ESUDO systemctl restart emulationstation 2>/dev/null \
+        || $ESUDO systemctl restart emustation 2>/dev/null \
+        || true
+    kill -KILL -- -"$SCRIPT_PID" 2>/dev/null
+) &
+WATCHDOG_PID=$!
+
+# gptokeyb discovery + lifecycle (PortMaster pattern).
 GPTOKEYB_BIN=""
 for c in \
     /opt/system/Tools/PortMaster/gptokeyb/gptokeyb \
@@ -79,38 +131,29 @@ for c in \
     /usr/bin/gptokeyb; do
     [ -x "$c" ] && GPTOKEYB_BIN="$c" && break
 done
-
 KEYS_GPTK="/roms/.playora/keys.gptk"
 GPTOKEYB_PID=""
 start_gptokeyb() {
-    if [ -n "$GPTOKEYB_BIN" ] && [ -f "$KEYS_GPTK" ]; then
-        # Kill any pre-existing instance so we own the input device.
-        $ESUDO killall -9 gptokeyb 2>/dev/null
-        $ESUDO killall -9 gptokeyb2 2>/dev/null
-        SDL_GAMECONTROLLERCONFIG_FILE="" "$GPTOKEYB_BIN" -1 "playora" \
-            -c "$KEYS_GPTK" </dev/null >/dev/null 2>&1 &
-        GPTOKEYB_PID=$!
-    fi
+    [ -n "$GPTOKEYB_BIN" ] && [ -f "$KEYS_GPTK" ] || return
+    $ESUDO killall -9 gptokeyb gptokeyb2 2>/dev/null
+    SDL_GAMECONTROLLERCONFIG_FILE="" "$GPTOKEYB_BIN" -1 "playora" \
+        -c "$KEYS_GPTK" </dev/null >/dev/null 2>&1 &
+    GPTOKEYB_PID=$!
 }
 stop_gptokeyb() {
     [ -n "$GPTOKEYB_PID" ] && kill "$GPTOKEYB_PID" 2>/dev/null
-    $ESUDO killall -9 gptokeyb 2>/dev/null
-    $ESUDO killall -9 gptokeyb2 2>/dev/null
+    $ESUDO killall -9 gptokeyb gptokeyb2 2>/dev/null
 }
 
-trap '
+cleanup() {
+    rc=${END_RC:-1}
+    kill "$WATCHDOG_PID" 2>/dev/null
     stop_gptokeyb
-    $AGENT activity-end "$NAME" "${END_RC:-1}" --log "$LOG" >/dev/null 2>&1 || true
-    $AGENT sync >/dev/null 2>&1 || true
-' EXIT INT TERM
-
-restart_es() {
-    stop_gptokeyb
-    clear > /dev/tty1
-    $ESUDO systemctl restart emulationstation 2>/dev/null \
-        || $ESUDO systemctl restart emustation 2>/dev/null \
-        || true
+    $AGENT activity-end "$NAME" "$rc" --log "$LOG" >/dev/null 2>&1
+    $AGENT sync >/dev/null 2>&1
+    restart_es
 }
+trap cleanup EXIT INT TERM HUP
 
 start_gptokeyb
 
@@ -119,21 +162,30 @@ printf '║  \033[1;37mPLAYORA · %-43s\033[1;35m║\n' "$NAME"
 printf '╚══════════════════════════════════════════════════════╝\033[0m\n\n'
 
 echo "[$(date +%H:%M:%S)] command: $CMD" | tee -a "$LOG"
-echo "[$(date +%H:%M:%S)] timeout: ${TIMEOUT}s" | tee -a "$LOG"
+echo "[$(date +%H:%M:%S)] timeout:  ${TIMEOUT}s" | tee -a "$LOG"
+echo "[$(date +%H:%M:%S)] watchdog: ${MAX_TOTAL}s total budget" | tee -a "$LOG"
+echo "[$(date +%H:%M:%S)] tty:      $TTY" | tee -a "$LOG"
+echo "[$(date +%H:%M:%S)] es svc:   ${ES_SERVICE:-(auto)}" | tee -a "$LOG"
+echo "[$(date +%H:%M:%S)] gptokeyb: ${GPTOKEYB_BIN:-(missing, dialog wont accept gamepad)}" | tee -a "$LOG"
+
+# Verify the agent binary at all — fail loudly rather than silently.
+if [ ! -x /roms/.playora/playora-agent ]; then
+    printf '\n\033[1;31m  ✗ /roms/.playora/playora-agent missing or not executable.\033[0m\n'
+    END_RC=127
+    sleep 5
+    exit "$END_RC"
+fi
 
 $AGENT activity-begin "$NAME" >/dev/null 2>&1 || true
 
 NICE="nice -n 15"
-if command -v ionice >/dev/null 2>&1; then
-    IONICE="ionice -c 3"
-else
-    IONICE=""
-fi
+command -v ionice >/dev/null 2>&1 && IONICE="ionice -c 3" || IONICE=""
+
 if [ "$TIMEOUT" = "none" ]; then
     $NICE $IONICE $AGENT $CMD 2>&1 | tee -a "$LOG"
     END_RC=${PIPESTATUS:-$?}
 else
-    timeout "$TIMEOUT" $NICE $IONICE $AGENT $CMD 2>&1 | tee -a "$LOG"
+    timeout --kill-after=10 "$TIMEOUT" $NICE $IONICE $AGENT $CMD 2>&1 | tee -a "$LOG"
     END_RC=${PIPESTATUS:-$?}
 fi
 
@@ -143,63 +195,49 @@ else
     printf '\n\033[1;31m  ✗ FAIL  \033[0m exit %s\n' "$END_RC" | tee -a "$LOG"
 fi
 
-# Interactive review + restart prompt. dArkOSRE ships `dialog`, which makes
-# the gamepad navigate via gptokeyb (dpad = arrows, A = OK/Enter, B = Cancel).
-if command -v dialog >/dev/null 2>&1; then
-    while true; do
-        choice=$(dialog --no-mouse --keep-tite \
-            --backtitle "Playora · $NAME" \
-            --title "Done (exit $END_RC)" \
-            --menu "Use D-Pad to move, A to choose, B to back out." 14 60 4 \
-                view "📜  View full log (scrollable, B to close)" \
-                restart "↻  Restart EmulationStation now" \
-                stay "💤  Stay on terminal (run more commands later)" \
-            2>&1 >/dev/tty1) || choice="restart"
-        case "$choice" in
-            view)
-                dialog --no-mouse --keep-tite \
-                    --backtitle "Playora · $NAME" \
-                    --title "Log — $(basename "$LOG")" \
-                    --textbox "$LOG" 0 0 2>/dev/tty1 || true
-                ;;
-            stay)
-                clear > /dev/tty1
-                printf 'Returning to a shell prompt. Type "exit" or press the reset combo to return to ES.\n' > /dev/tty1
-                $ESUDO /bin/sh </dev/tty1 >/dev/tty1 2>&1
-                restart_es
-                exit "$END_RC"
-                ;;
-            *)
-                restart_es
-                exit "$END_RC"
-                ;;
-        esac
-    done
-else
-    # No dialog binary — print a textual menu + read raw key from tty1.
-    printf '\n\033[1;37mPress A/Enter to restart ES · B/Escape to view the log · S to stay\033[0m\n'
-    while :; do
-        IFS= read -r -n 1 key
-        case "$key" in
-            "" | a | A | y | Y) restart_es; exit "$END_RC" ;;
-            b | B)
-                if command -v less >/dev/null 2>&1; then
-                    less "$LOG"
-                else
-                    tail -n 200 "$LOG"
-                    printf '\n(end of log — press any key)\n'
-                    IFS= read -r -n 1 _
-                fi
-                ;;
-            s | S)
-                clear > /dev/tty1
-                $ESUDO /bin/sh </dev/tty1 >/dev/tty1 2>&1
-                restart_es
-                exit "$END_RC"
-                ;;
-        esac
-    done
+# Interactive review. Everything bounded. Worst case: 30s without input
+# → auto-restart ES. Never blocks indefinitely.
+HAVE_DIALOG=0
+command -v dialog >/dev/null 2>&1 && HAVE_DIALOG=1
+
+if [ "$HAVE_DIALOG" = "1" ] && [ -n "$GPTOKEYB_BIN" ]; then
+    # Full menu — bounded to 60s of inactivity.
+    choice=$(timeout 60 dialog --no-mouse --keep-tite \
+        --timeout 60 \
+        --backtitle "Playora · $NAME (exit $END_RC)" \
+        --title " Done — D-Pad + A " \
+        --menu "Choose what to do next:" 14 60 4 \
+            restart "↻  Restart EmulationStation (default)" \
+            view    "📜  View full log (scrollable)" \
+            stay    "💤  Drop to shell (advanced)" \
+        2>&1 >"$TTY") || choice="restart"
+    case "$choice" in
+        view)
+            timeout 120 dialog --no-mouse --keep-tite \
+                --backtitle "Playora · $NAME" \
+                --title "Log — $(basename "$LOG")" \
+                --textbox "$LOG" 0 0 2>"$TTY" || true
+            ;;
+        stay)
+            clear > "$TTY"
+            printf 'Shell — type exit to restart ES.\n' > "$TTY"
+            timeout 600 $ESUDO /bin/sh <"$TTY" >"$TTY" 2>&1 || true
+            ;;
+    esac
+    exit "$END_RC"
 fi
+
+# Fallback: print log tail + bounded countdown, no deps.
+printf '\n----- last 20 lines of the log -----\n'
+tail -n 20 "$LOG" 2>/dev/null
+printf '\n--------------------------------------\n\n'
+printf '\033[1;37m  Returning to EmulationStation in '
+for i in 10 9 8 7 6 5 4 3 2 1; do
+    printf '\b\b\b%2d ' "$i"
+    sleep 1
+done
+printf '\b\b\bnow.\033[0m\n'
+exit "$END_RC"
 RUNNER
 chmod 0755 "$PLAYORA_DIR/port-runner.sh"
 
