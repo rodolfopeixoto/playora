@@ -1,0 +1,13 @@
+[package]
+name = "darkos-update"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+darkos-core.workspace = true
+ureq.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+sha2.workspace = true

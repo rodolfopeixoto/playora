@@ -1,0 +1,11 @@
+[package]
+name = "darkos-themes"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+darkos-core.workspace = true
+serde.workspace = true
+ureq.workspace = true
+anyhow.workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "darkos-perf"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+darkos-core.workspace = true
+serde.workspace = true
+anyhow.workspace = true

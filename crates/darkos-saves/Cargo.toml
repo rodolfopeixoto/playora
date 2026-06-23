@@ -1,0 +1,11 @@
+[package]
+name = "darkos-saves"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+darkos-core.workspace = true
+walkdir.workspace = true
+chrono.workspace = true
+anyhow.workspace = true

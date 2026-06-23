@@ -1,13 +1,29 @@
 [workspace]
 resolver = "2"
-members = ["crates/playora-common", "crates/playora-agent", "crates/playora-server"]
+members = [
+    "crates/playora-common",
+    "crates/playora-agent",
+    "crates/playora-server",
+    "crates/darkos-core",
+    "crates/darkos-hw",
+    "crates/darkos-db",
+    "crates/darkos-storage",
+    "crates/darkos-roms",
+    "crates/darkos-saves",
+    "crates/darkos-firmware",
+    "crates/darkos-themes",
+    "crates/darkos-update",
+    "crates/darkos-perf",
+    "crates/darkos-tui",
+    "crates/darkos-cli",
+]
 
 [workspace.package]
 edition = "2021"
 version = "0.4.5"
 authors = ["Rodolfo Peixoto <rodolfog.peixoto@gmail.com>"]
 license = "MIT"
-rust-version = "1.81"
+rust-version = "1.85"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -39,7 +55,20 @@ flate2 = "1"
 tar = "0.4"
 self_update = { version = "0.41", default-features = false, features = ["rustls"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+ureq = { version = "2", features = ["json", "tls"] }
+indicatif = "0.17"
 playora-common = { path = "crates/playora-common" }
+darkos-core     = { path = "crates/darkos-core" }
+darkos-hw       = { path = "crates/darkos-hw" }
+darkos-db       = { path = "crates/darkos-db" }
+darkos-storage  = { path = "crates/darkos-storage" }
+darkos-roms     = { path = "crates/darkos-roms" }
+darkos-saves    = { path = "crates/darkos-saves" }
+darkos-firmware = { path = "crates/darkos-firmware" }
+darkos-themes   = { path = "crates/darkos-themes" }
+darkos-update   = { path = "crates/darkos-update" }
+darkos-perf     = { path = "crates/darkos-perf" }
+darkos-tui      = { path = "crates/darkos-tui" }
 
 [profile.release]
 opt-level = "z"
