@@ -1,19 +1,23 @@
 //! playora-agent — runs on the R36S, captures runtime data, syncs to server.
 
 mod activity;
+mod audit;
 mod autosync;
 mod catalog;
 mod cfg;
+mod clean;
 mod cleanup;
 mod cloud;
 mod compress;
 mod coolrom;
 mod db;
+mod doctor;
 mod download;
 mod extract;
 mod features;
 mod fileserver;
 mod fix_exit;
+mod hotkeys;
 mod hw;
 mod kodi;
 mod launcher;
@@ -21,6 +25,7 @@ mod lockfile;
 mod metadata;
 mod myrient;
 mod portmaster;
+mod repair;
 mod resources;
 mod restore;
 mod saves;
@@ -68,6 +73,12 @@ enum Cmd {
         /// Apply suggested fixes (e.g. patch retroarch.cfg video_threaded).
         #[arg(long)]
         apply_fixes: bool,
+        /// Run the deep doctor: JSON report + dashboard event + scored summary.
+        #[arg(long)]
+        deep: bool,
+        /// With --deep, print only the JSON report to stdout (TTY summary suppressed).
+        #[arg(long)]
+        json: bool,
     },
     /// Print current status (JSON)
     Status,
@@ -215,10 +226,35 @@ enum Cmd {
     AutosyncDisable,
     /// Kill stuck agent processes + clear lock files (ES restarts on exit)
     Recover,
-    /// Patch retroarch.cfg to fix the Select+Start exit-game freeze on R36S
-    FixExitGame {
+    /// Show every emulator's hotkeys + how-to-exit + how-to-open-menu in English
+    Hotkeys {
+        /// Filter to one emulator/system (e.g. "retroarch", "ppsspp", "drastic")
+        #[arg(long)]
+        system: Option<String>,
+        /// Print structured JSON to stdout instead of the TTY view
+        #[arg(long)]
+        json: bool,
+    },
+    /// Audit /roms — inventory, duplicates, broken CUE/M3U, missing BIOS, junk
+    AuditRoms,
+    /// Remove certified-safe junk (.DS_Store, ._*, __MACOSX, CRLF in scripts)
+    CleanRoms {
         #[arg(long)]
         apply: bool,
+    },
+    /// Move ROMs from _inbox or wrong system folder to the correct one
+    RepairRomLayout {
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Patch retroarch.cfg to fix the Select+Start exit-game freeze on R36S
+    FixExitGame {
+        /// Write changes (default is dry-run).
+        #[arg(long)]
+        apply: bool,
+        /// Rollback the most recent timestamped backup; ignores --apply.
+        #[arg(long)]
+        restore: bool,
     },
     /// Process /roms/.playora/delete_queue.txt and (optionally) server delete-requests
     Cleanup {
@@ -370,7 +406,16 @@ fn main() -> Result<()> {
         Cmd::Doctor {
             interactive: _,
             apply_fixes,
-        } => tests::cmd_doctor(load_cfg(cli.config.as_deref())?, apply_fixes),
+            deep,
+            json,
+        } => {
+            let cfg = load_cfg(cli.config.as_deref())?;
+            if deep {
+                doctor::cmd_doctor_deep(cfg, json)
+            } else {
+                tests::cmd_doctor(cfg, apply_fixes)
+            }
+        }
         Cmd::Status => sync::cmd_status(load_cfg(cli.config.as_deref())?),
         Cmd::Tui { screen } => tui::cmd_tui(load_cfg(cli.config.as_deref())?, screen),
         Cmd::Hardware(c) => match c {
@@ -660,7 +705,15 @@ fn main() -> Result<()> {
         Cmd::AutosyncEnable => autosync::cmd_enable(),
         Cmd::AutosyncDisable => autosync::cmd_disable(),
         Cmd::Recover => autosync::cmd_recover(),
-        Cmd::FixExitGame { apply } => fix_exit::cmd_fix_exit_game(apply),
+        Cmd::Hotkeys { system, json } => {
+            hotkeys::cmd_hotkeys(load_cfg(cli.config.as_deref())?, system, json)
+        }
+        Cmd::AuditRoms => audit::cmd_audit(load_cfg(cli.config.as_deref())?),
+        Cmd::CleanRoms { apply } => clean::cmd_clean(load_cfg(cli.config.as_deref())?, apply),
+        Cmd::RepairRomLayout { apply } => {
+            repair::cmd_repair(load_cfg(cli.config.as_deref())?, apply)
+        }
+        Cmd::FixExitGame { apply, restore } => fix_exit::cmd_fix_exit_game_v2(apply, restore),
         Cmd::Serve { bind } => fileserver::cmd_serve(&bind),
     }
 }
