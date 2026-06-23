@@ -123,6 +123,10 @@ async fn main() -> Result<()> {
             "/api/v1/devices/:id/doctor-report",
             get(routes::device_doctor_report),
         )
+        .route(
+            "/api/v1/devices/:id/events/stream",
+            get(routes::device_events_stream),
+        )
         .route("/api/v1/activities/recent", get(routes::activities_recent))
         .route("/api/v1/activities/:id", get(routes::activity_get))
         .route(

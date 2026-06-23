@@ -1007,3 +1007,88 @@ pub async fn downloads_report(
     );
     Json(serde_json::json!({"ok": true}))
 }
+
+// ---------------------------------------------------------------
+// Sprint-6: Server-Sent Events stream of events for a device
+// ---------------------------------------------------------------
+
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
+use futures::stream::Stream;
+use std::convert::Infallible;
+use std::time::Duration as StdDuration;
+
+/// GET /api/v1/devices/:id/events/stream
+/// Polls every 2s for new rows in `events` since the last id and pushes them
+/// as SSE messages. Keepalive comment every 15s.
+pub async fn device_events_stream(
+    AxState(state): AxState<State>,
+    Path(id): Path<String>,
+) -> Sse<impl Stream<Item = std::result::Result<SseEvent, Infallible>>> {
+    use futures::StreamExt;
+    use tokio_stream::wrappers::IntervalStream;
+    let mut last_id: i64 = {
+        let conn = state.lock().await;
+        conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM events WHERE device_id=?1",
+            [&id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+    };
+    let device_id = id.clone();
+    let stream = IntervalStream::new(tokio::time::interval(StdDuration::from_secs(2)))
+        .then(move |_| {
+            let state = state.clone();
+            let device_id = device_id.clone();
+            async move {
+                let conn = state.lock().await;
+                let rows: Vec<(i64, String, String, String)> = {
+                    let mut stmt = match conn.prepare(
+                        "SELECT id, event_type, payload_json, received_at FROM events
+                         WHERE device_id=?1 AND id>?2 ORDER BY id LIMIT 100",
+                    ) {
+                        Ok(s) => s,
+                        Err(_) => return Vec::new(),
+                    };
+                    let it = stmt
+                        .query_map(rusqlite::params![&device_id, last_id], |r| {
+                            Ok((
+                                r.get::<_, i64>(0)?,
+                                r.get::<_, String>(1)?,
+                                r.get::<_, String>(2)?,
+                                r.get::<_, String>(3)?,
+                            ))
+                        })
+                        .ok();
+                    match it {
+                        Some(rs) => rs.flatten().collect(),
+                        None => Vec::new(),
+                    }
+                };
+                if let Some((max_id, _, _, _)) = rows.last() {
+                    last_id = *max_id;
+                }
+                rows.into_iter()
+                    .map(|(id, etype, payload, recv)| {
+                        let body = serde_json::json!({
+                            "id": id,
+                            "event_type": etype,
+                            "received_at": recv,
+                            "payload": serde_json::from_str::<serde_json::Value>(&payload)
+                                .unwrap_or_default(),
+                        });
+                        Ok(SseEvent::default()
+                            .event(etype.as_str())
+                            .data(body.to_string()))
+                    })
+                    .collect::<Vec<_>>()
+            }
+        })
+        .flat_map(futures::stream::iter);
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(StdDuration::from_secs(15))
+            .text("keepalive"),
+    )
+}

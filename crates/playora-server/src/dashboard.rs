@@ -1534,9 +1534,10 @@ pub async fn device_issues_page(
         .as_deref()
         .map(|f| format!(" (filtered: {f})"))
         .unwrap_or_default();
+    let stream_url = format!("/api/v1/devices/{id}/events/stream");
     let html = format!(
         "<!doctype html><html><head><title>Issues — {id}</title>{TAB_STYLE}</head><body>\
-         <h1>Device {id} — Issues{filter_label}</h1>{tabs}\
+         <h1>Device {id} — Issues{filter_label} <span id=\"live-dot\" class=\"badge info\" title=\"live SSE stream\">live</span></h1>{tabs}\
          <div class=\"card\">\
            <a href=\"?sev=critical\"><span class=\"badge critical\">critical: {}</span></a> \
            <a href=\"?sev=warning\"><span class=\"badge warning\">warning: {}</span></a> \
@@ -1544,7 +1545,31 @@ pub async fn device_issues_page(
            <a href=\"./issues\" class=\"muted\">clear filter</a>\
          </div>\
          <table><thead><tr><th>Severity</th><th>Title / Code</th><th>Evidence</th><th>Suggested fix</th><th>When</th></tr></thead>\
-         <tbody>{rows_html}</tbody></table></body></html>",
+         <tbody id=\"issues-tbody\">{rows_html}</tbody></table>\
+         <script>\
+         (function() {{\
+           const tbody = document.getElementById('issues-tbody');\
+           const dot = document.getElementById('live-dot');\
+           const es = new EventSource('{stream_url}');\
+           es.addEventListener('system_issue_detected', function(e) {{\
+             try {{\
+               const obj = JSON.parse(e.data);\
+               const d = obj.payload && obj.payload.data ? obj.payload.data : obj.payload || {{}};\
+               const sev = d.severity || 'info';\
+               const tr = document.createElement('tr');\
+               tr.innerHTML = '<td><span class=\"badge ' + sev + '\">' + sev + '</span></td>' +\
+                 '<td>' + (d.title || '?') + '<br/><code>' + (d.code || '?') + '</code></td>' +\
+                 '<td>' + (d.evidence ? '<code>' + d.evidence + '</code>' : '') + '</td>' +\
+                 '<td>' + (d.suggested_fix || '') + '</td>' +\
+                 '<td class=\"muted\">just now</td>';\
+               tbody.insertBefore(tr, tbody.firstChild);\
+             }} catch(_) {{}}\
+           }});\
+           es.onerror = function() {{ dot.textContent = 'reconnecting'; }};\
+           es.onopen = function() {{ dot.textContent = 'live'; }};\
+         }})();\
+         </script>\
+         </body></html>",
         by_sev.0, by_sev.1, by_sev.2,
     );
     Html(html)
