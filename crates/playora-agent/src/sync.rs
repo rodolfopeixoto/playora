@@ -152,7 +152,7 @@ pub fn cmd_run(cfg: AgentConfig) -> Result<()> {
         println!("scheduled: fetch covers daily at {h:02}:00 UTC");
     }
     let mut sched = Scheduler::default();
-    let mut sessions = crate::sessions::SessionTracker::default();
+    let mut sessions = crate::sessions::SessionTracker::new(&cfg);
     loop {
         let _ = cmd_heartbeat(cfg.clone());
         if let Err(e) = cmd_sync_once(cfg.clone()) {
