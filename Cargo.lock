@@ -506,7 +506,7 @@ dependencies = [
 
 [[package]]
 name = "darkos-cli"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "bytesize",
@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "darkos-core"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "darkos-db"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -553,18 +553,19 @@ dependencies = [
 
 [[package]]
 name = "darkos-firmware"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "darkos-core",
  "serde",
  "serde_json",
+ "sha2",
  "ureq",
 ]
 
 [[package]]
 name = "darkos-hw"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -577,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "darkos-perf"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "darkos-core",
@@ -586,7 +587,7 @@ dependencies = [
 
 [[package]]
 name = "darkos-roms"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "bytesize",
@@ -604,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "darkos-saves"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -614,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "darkos-storage"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "bytesize",
@@ -624,7 +625,7 @@ dependencies = [
 
 [[package]]
 name = "darkos-themes"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "darkos-core",
@@ -634,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "darkos-tui"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "bytesize",
@@ -655,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "darkos-update"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "darkos-core",
@@ -1821,7 +1822,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "playora-agent"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -1863,7 +1864,7 @@ dependencies = [
 
 [[package]]
 name = "playora-common"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "chrono",
  "serde",
@@ -1874,7 +1875,7 @@ dependencies = [
 
 [[package]]
 name = "playora-server"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "axum",

@@ -26,11 +26,13 @@ write_port() {
     chmod 0755 "$OUT"
 }
 
-write_port "darkOs Menu"        'exec /roms/.darkOs/bin/darkos tui'
-write_port "darkOs System Log"  'exec /roms/.darkOs/bin/darkos-view-wrap.sh /var/log/messages'
-write_port "darkOs Kernel Log"  'exec sh -c "dmesg | /roms/.darkOs/bin/darkos-view-wrap.sh"'
-write_port "darkOs Update"      'exec sudo /roms/.darkOs/bin/console-install.sh'
-write_port "darkOs Self-Update" 'exec sudo /roms/.darkOs/bin/darkos update --self'
+write_port "darkOs Menu"            'exec /roms/.darkOs/bin/darkos tui'
+write_port "darkOs System Log"      'exec /roms/.darkOs/bin/darkos-view-wrap.sh /var/log/messages'
+write_port "darkOs Kernel Log"      'exec sh -c "dmesg | /roms/.darkOs/bin/darkos-view-wrap.sh"'
+write_port "darkOs Update"          'exec sudo /roms/.darkOs/bin/console-install.sh'
+write_port "darkOs Self-Update"     'exec sudo /roms/.darkOs/bin/darkos update --self'
+write_port "darkOs Firmware Check"  'exec sh -c "/roms/.darkOs/bin/darkos firmware check dArkOSRE-R36 | /roms/.darkOs/bin/darkos-view-wrap.sh"'
+write_port "darkOs Firmware Fetch"  'exec sh -c "sudo /roms/.darkOs/bin/darkos firmware fetch dArkOSRE-R36 | /roms/.darkOs/bin/darkos-view-wrap.sh"'
 
 printf '%s\n' "$(grep -m1 '^version' "$ROOT/Cargo.toml" | cut -d'"' -f2)" > "$DARKOS_DIR/VERSION"
 

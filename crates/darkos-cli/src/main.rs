@@ -39,7 +39,10 @@ enum Cmd {
     /// Snapshot all save files to <DARKOS_HOME>/cache/saves_<ts>/
     Saves,
     /// List known firmwares + current
-    Firmware,
+    Firmware {
+        #[command(subcommand)]
+        action: Option<FirmwareAction>,
+    },
     /// List installed themes + small catalog
     Themes,
     /// Probe APT updates count + (with --apply) run apt-get upgrade,
@@ -76,6 +79,22 @@ enum Cmd {
         /// Path to file (omit to read stdin)
         file: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum FirmwareAction {
+    /// List known firmwares and the currently-installed identifier
+    List,
+    /// Compare current firmware against the named entry
+    Check { name: String },
+    /// Download firmware image into <DARKOS_HOME>/firmware (set DARKOS_FIRMWARE_BASE_URL for the mirror)
+    Fetch {
+        name: String,
+        #[arg(long)]
+        dest: Option<PathBuf>,
+    },
+    /// Print where staged firmware images live
+    Where,
 }
 
 fn main() -> Result<()> {
@@ -129,16 +148,63 @@ fn main() -> Result<()> {
             )?;
             println!("snapshot at: {}", p.display());
         }
-        Cmd::Firmware => {
-            match darkos_firmware::current_firmware_string() {
-                Ok(c) => println!("current: {c}"),
-                Err(e) => println!("current: <unknown> ({e})"),
+        Cmd::Firmware { action } => match action.unwrap_or(FirmwareAction::List) {
+            FirmwareAction::List => {
+                match darkos_firmware::current_firmware_string() {
+                    Ok(c) => println!("current: {c}"),
+                    Err(e) => println!("current: <unknown> ({e})"),
+                }
+                println!("known:");
+                for fw in darkos_firmware::known_firmwares() {
+                    println!("- {} ({}) — {}", fw.name, fw.vendor, fw.variant_url);
+                }
+                println!(
+                    "stage dir: {}",
+                    darkos_firmware::default_stage_dir().display()
+                );
             }
-            println!("known:");
-            for fw in darkos_firmware::known_firmwares() {
-                println!("- {} ({}) — {}", fw.name, fw.vendor, fw.variant_url);
+            FirmwareAction::Check { name } => {
+                let (current, entry, installed) = darkos_firmware::check(&name)?;
+                println!("current installed: {current}");
+                println!("target firmware:   {} ({})", entry.name, entry.vendor);
+                println!("variant url:       {}", entry.variant_url);
+                println!(
+                    "matches installed: {}",
+                    if installed { "yes" } else { "no" }
+                );
+                if let Some(n) = entry.notes {
+                    println!("notes: {n}");
+                }
             }
-        }
+            FirmwareAction::Fetch { name, dest } => {
+                let report = darkos_firmware::fetch(&name, dest.as_deref())?;
+                println!(
+                    "fetched: {} ({} bytes)",
+                    report.path.display(),
+                    report.bytes
+                );
+                println!("source:  {}", report.source_url);
+                println!(
+                    "sha256:  {}{}",
+                    report.sha256,
+                    if report.sha256_verified {
+                        " (verified)"
+                    } else {
+                        ""
+                    }
+                );
+                println!("\nnext steps:");
+                println!("  1. shut down the handheld");
+                println!(
+                    "  2. eject the SD card and flash {} from a PC (Etcher / dd)",
+                    report.path.display()
+                );
+                println!("  3. boot back into the new firmware");
+            }
+            FirmwareAction::Where => {
+                println!("{}", darkos_firmware::default_stage_dir().display());
+            }
+        },
         Cmd::Themes => {
             println!("installed:");
             for t in darkos_themes::list_installed()? {
