@@ -60,6 +60,15 @@ cat > "$OUT/latest.json" <<EOF
 }
 EOF
 
+if command -v gh >/dev/null 2>&1; then
+    for fw in dArkOSRE-R36 dArkOS; do
+        name="firmware-manifest-$fw.json"
+        if gh release download --pattern "$name" --dir "$OUT" 2>/dev/null; then
+            echo "[carry] $name from previous release"
+        fi
+    done
+fi
+
 ls -lh "$OUT"
 echo "[ok] release $VERSION at $OUT"
 echo "    upload all files to: $BASE_URL/"
