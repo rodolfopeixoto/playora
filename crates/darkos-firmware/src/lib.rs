@@ -84,6 +84,42 @@ pub fn default_stage_dir() -> PathBuf {
     PathBuf::from(home).join("firmware")
 }
 
+pub fn default_manifest_path(name: &str) -> PathBuf {
+    let home = std::env::var("DARKOS_HOME").unwrap_or_else(|_| "/roms/.darkOs".into());
+    PathBuf::from(home).join(format!("firmware-manifest-{name}.json"))
+}
+
+pub fn default_manifest_url(name: &str) -> String {
+    std::env::var("DARKOS_FIRMWARE_MANIFEST_URL").unwrap_or_else(|_| {
+        format!(
+            "https://github.com/rodolfopeixoto/playora/releases/latest/download/firmware-manifest-{name}.json"
+        )
+    })
+}
+
+pub fn refresh_manifest(name: &str, dest: Option<&Path>) -> Result<(PathBuf, ReleaseImage)> {
+    let url = default_manifest_url(name);
+    let body = ureq::get(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .call()
+        .map_err(|e| Error::Other(format!("fetch manifest {url}: {e}")))?
+        .into_string()
+        .map_err(|e| Error::Other(format!("read manifest body: {e}")))?;
+    let parsed: ReleaseImage =
+        serde_json::from_str(&body).map_err(|e| Error::Other(format!("parse manifest: {e}")))?;
+    let path = match dest {
+        Some(p) => p.to_path_buf(),
+        None => default_manifest_path(name),
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| Error::Other(format!("mkdir {}: {e}", parent.display())))?;
+    }
+    std::fs::write(&path, &body)
+        .map_err(|e| Error::Other(format!("write {}: {e}", path.display())))?;
+    Ok((path, parsed))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchReport {
     pub name: String,

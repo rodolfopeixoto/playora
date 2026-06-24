@@ -95,6 +95,11 @@ enum FirmwareAction {
     },
     /// Print where staged firmware images live
     Where,
+    /// Refresh the multi-part release manifest from the GitHub release
+    Refresh {
+        #[arg(default_value = "dArkOSRE-R36")]
+        name: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -203,6 +208,18 @@ fn main() -> Result<()> {
             }
             FirmwareAction::Where => {
                 println!("{}", darkos_firmware::default_stage_dir().display());
+            }
+            FirmwareAction::Refresh { name } => {
+                let (path, img) = darkos_firmware::refresh_manifest(&name, None)?;
+                println!("manifest saved: {}", path.display());
+                println!("file:    {}", img.file_name);
+                println!("sha256:  {}", img.sha256);
+                println!(
+                    "size:    {} bytes ({} parts)",
+                    img.size_bytes,
+                    img.parts.len()
+                );
+                println!("hint:    run `darkos firmware fetch {name}` to download");
             }
         },
         Cmd::Themes => {

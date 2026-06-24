@@ -50,7 +50,7 @@ write_port "darkOs Kernel Log"      'exec sh -c "dmesg | /roms/.darkOs/bin/darko
 write_port "darkOs Update"          'exec sudo /roms/.darkOs/bin/console-install.sh'
 write_port "darkOs Self-Update"     'exec sudo /roms/.darkOs/bin/darkos update --self'
 write_port "darkOs Firmware Check"  'exec sh -c ". /roms/.darkOs/env.sh; /roms/.darkOs/bin/darkos firmware check dArkOSRE-R36 | /roms/.darkOs/bin/darkos-view-wrap.sh"'
-write_port "darkOs Firmware Refresh" 'exec sh -c "sudo /roms/.darkOs/bin/refresh-firmware-manifest.sh | /roms/.darkOs/bin/darkos-view-wrap.sh"'
+write_port "darkOs Firmware Refresh" 'exec sh -c ". /roms/.darkOs/env.sh; sudo -E /roms/.darkOs/bin/darkos firmware refresh dArkOSRE-R36 | /roms/.darkOs/bin/darkos-view-wrap.sh"'
 write_port "darkOs Firmware Fetch"  'exec sh -c ". /roms/.darkOs/env.sh; sudo -E /roms/.darkOs/bin/darkos firmware fetch dArkOSRE-R36 | /roms/.darkOs/bin/darkos-view-wrap.sh"'
 
 printf '%s\n' "$(grep -m1 '^version' "$ROOT/Cargo.toml" | cut -d'"' -f2)" > "$DARKOS_DIR/VERSION"
